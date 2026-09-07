@@ -7,6 +7,9 @@
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap');
   * { box-sizing: border-box; }
@@ -30,34 +33,19 @@ const {
   useRef
 } = React;
 
-// ---------- shim de storage: localStorage en vez de window.storage de Claude ----------
-window.storage = {
-  get: async key => {
-    const v = localStorage.getItem(key);
-    if (v === null) throw new Error("not found");
-    return {
-      key,
-      value: v,
-      shared: false
-    };
-  },
-  set: async (key, value) => {
-    localStorage.setItem(key, value);
-    return {
-      key,
-      value,
-      shared: false
-    };
-  },
-  delete: async key => {
-    localStorage.removeItem(key);
-    return {
-      key,
-      deleted: true,
-      shared: false
-    };
-  }
+// ---------- Firebase: Auth (Google) + Firestore, para sincronizar entre dispositivos ----------
+const firebaseConfig = {
+  apiKey: "AIzaSyC58grKoCWICLMlJyvFQHstrxzgUevDC8c",
+  authDomain: "mi-calendar-51554.firebaseapp.com",
+  projectId: "mi-calendar-51554",
+  storageBucket: "mi-calendar-51554.firebasestorage.app",
+  messagingSenderId: "648666150758",
+  appId: "1:648666150758:web:f7816d89d29c9d1d19faa7",
+  measurementId: "G-CD6FYLJ4HS"
 };
+firebase.initializeApp(firebaseConfig);
+const fbAuth = firebase.auth();
+const fbDb = firebase.firestore();
 
 // ---------- iconos simples (sin dependencias externas) ----------
 const Ic = ({
@@ -291,6 +279,9 @@ async function gcalDeleteEvent(token, eventId) {
   }
 }
 function Plandia() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  const [authError, setAuthError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -350,35 +341,55 @@ function Plandia() {
     }, 20000);
   };
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await window.storage.get(STORAGE_KEY);
-        if (res && res.value) {
-          const data = JSON.parse(res.value);
-          setCategories(data.categories || []);
-          setTasks(data.tasks || []);
-          setOverrides(data.overrides || {});
-        }
-      } catch (e) {/* sin datos guardados */}
-      setLoaded(true);
-    })();
+    const unsub = fbAuth.onAuthStateChanged(u => {
+      setUser(u);
+      setAuthLoading(false);
+    });
+    return unsub;
   }, []);
+  const signIn = () => {
+    setAuthError("");
+    fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e => setAuthError(e.message));
+  };
+  const signOutUser = () => fbAuth.signOut();
   useEffect(() => {
-    if (!loaded) return;
+    if (!user) {
+      setLoaded(false);
+      return;
+    }
+    setLoaded(false);
+    const ref = fbDb.collection("bitacora").doc(user.uid);
+    const unsub = ref.onSnapshot(snap => {
+      const data = snap.data() || {};
+      setCategories(data.categories || []);
+      setTasks(data.tasks || []);
+      setOverrides(data.overrides || {});
+      setLoaded(true);
+    }, e => {
+      console.error("Error leyendo Firestore", e);
+      setLoaded(true);
+    });
+    return unsub;
+  }, [user]);
+  useEffect(() => {
+    if (!loaded || !user) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        await window.storage.set(STORAGE_KEY, JSON.stringify({
+        await fbDb.collection("bitacora").doc(user.uid).set({
           categories,
           tasks,
-          overrides
-        }));
+          overrides,
+          updatedAt: Date.now()
+        }, {
+          merge: true
+        });
       } catch (e) {
-        console.error("No se pudo guardar", e);
+        console.error("No se pudo guardar en Firestore", e);
       }
-    }, 300);
+    }, 400);
     return () => clearTimeout(saveTimer.current);
-  }, [categories, tasks, overrides, loaded]);
+  }, [categories, tasks, overrides, loaded, user]);
   const catById = useMemo(() => {
     const m = {};
     categories.forEach(c => m[c.id] = c);
@@ -666,6 +677,45 @@ function Plandia() {
       done: !t.cta.done
     }
   }));
+  if (authLoading) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: styles.loadingWrap
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 20,
+      spin: true
+    }, "⟳"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: 10,
+        fontSize: 14,
+        color: "#8A8A93"
+      }
+    }, "Cargando…"));
+  }
+  if (!user) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: styles.loginWrap
+    }, /*#__PURE__*/React.createElement("div", {
+      style: styles.loginCard
+    }, /*#__PURE__*/React.createElement("div", {
+      style: styles.brand
+    }, /*#__PURE__*/React.createElement("span", {
+      style: styles.brandMark
+    }, "◆"), " Bitácora"), /*#__PURE__*/React.createElement("p", {
+      style: {
+        color: "#8A8A93",
+        fontSize: 13.5,
+        margin: "10px 0 20px"
+      }
+    }, "Iniciá sesión con Google para ver y guardar tus tareas, sincronizadas entre tus dispositivos."), /*#__PURE__*/React.createElement("button", {
+      style: styles.loginBtn,
+      onClick: signIn
+    }, "Iniciar sesión con Google"), authError && /*#__PURE__*/React.createElement("div", {
+      style: {
+        ...styles.gcalErrorBanner,
+        margin: "12px 0 0"
+      }
+    }, authError)));
+  }
   if (!loaded) {
     return /*#__PURE__*/React.createElement("div", {
       style: styles.loadingWrap
@@ -690,7 +740,13 @@ function Plandia() {
     style: styles.brandMark
   }, "◆"), " Bitácora"), /*#__PURE__*/React.createElement("div", {
     style: styles.offlineTag
-  }, "Versión local — sin sync de Calendar"), /*#__PURE__*/React.createElement("nav", {
+  }, user.email, " · ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      textDecoration: "underline",
+      cursor: "pointer"
+    },
+    onClick: signOutUser
+  }, "salir")), /*#__PURE__*/React.createElement("nav", {
     style: {
       marginTop: 16
     }
@@ -2242,6 +2298,32 @@ const styles = {
     borderRadius: 8,
     padding: "8px 12px",
     fontSize: 12.5
+  },
+  loginWrap: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 500
+  },
+  loginCard: {
+    background: "#fff",
+    border: `1px solid ${LINE}`,
+    borderRadius: 14,
+    padding: 32,
+    maxWidth: 340,
+    textAlign: "center",
+    boxShadow: "0 8px 30px rgba(44,27,69,0.12)"
+  },
+  loginBtn: {
+    width: "100%",
+    background: INK,
+    color: "#F4F3F0",
+    border: "none",
+    borderRadius: 8,
+    padding: "10px 14px",
+    fontSize: 13.5,
+    fontWeight: 500,
+    cursor: "pointer"
   }
 };
 ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(Plandia, null));
