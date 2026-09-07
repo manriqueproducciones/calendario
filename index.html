@@ -266,6 +266,32 @@ async function gcalInsertEvent(token, task) {
   const data = await res.json();
   return data.id;
 }
+async function gcalUpdateEvent(token, eventId, task) {
+  const body = {
+    summary: task.title,
+    description: task.notes || undefined,
+    start: {
+      date: task.startDate
+    },
+    end: {
+      date: addDaysISO(task.startDate, 1)
+    }
+  };
+  const rrule = buildRRule(task.recurrence);
+  body.recurrence = rrule ? [rrule] : [];
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error && err.error.message || `HTTP ${res.status}`);
+  }
+}
 async function gcalDeleteEvent(token, eventId) {
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
     method: "DELETE",
@@ -284,15 +310,20 @@ function Plandia() {
   const [authError, setAuthError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
+  const [clients, setClients] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [overrides, setOverrides] = useState({});
   const [view, setView] = useState("hoy");
   const [activeCategory, setActiveCategory] = useState(null);
-  const [showForm, setShowForm] = useState(false);
+  const [activeClient, setActiveClient] = useState(null);
+  const [formState, setFormState] = useState(null);
   const [confirmingDelete, setConfirmingDelete] = useState(null);
   const [confirmingCatDelete, setConfirmingCatDelete] = useState(null);
   const [showCatForm, setShowCatForm] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
+  const [confirmingClientDelete, setConfirmingClientDelete] = useState(null);
+  const [showClientForm, setShowClientForm] = useState(false);
+  const [editingClient, setEditingClient] = useState(null);
   const [expanded, setExpanded] = useState({});
   const [kpiScope, setKpiScope] = useState("todo");
   const [gcalToken, setGcalToken] = useState(null);
@@ -362,6 +393,7 @@ function Plandia() {
     const unsub = ref.onSnapshot(snap => {
       const data = snap.data() || {};
       setCategories(data.categories || []);
+      setClients(data.clients || []);
       setTasks(data.tasks || []);
       setOverrides(data.overrides || {});
       setLoaded(true);
@@ -378,6 +410,7 @@ function Plandia() {
       try {
         await fbDb.collection("bitacora").doc(user.uid).set({
           categories,
+          clients,
           tasks,
           overrides,
           updatedAt: Date.now()
@@ -389,15 +422,27 @@ function Plandia() {
       }
     }, 400);
     return () => clearTimeout(saveTimer.current);
-  }, [categories, tasks, overrides, loaded, user]);
+  }, [categories, clients, tasks, overrides, loaded, user]);
   const catById = useMemo(() => {
     const m = {};
     categories.forEach(c => m[c.id] = c);
     return m;
   }, [categories]);
+  const clientById = useMemo(() => {
+    const m = {};
+    clients.forEach(c => m[c.id] = c);
+    return m;
+  }, [clients]);
   const taskCounts = useMemo(() => {
     const m = {};
     tasks.forEach(t => m[t.categoryId] = (m[t.categoryId] || 0) + 1);
+    return m;
+  }, [tasks]);
+  const clientTaskCounts = useMemo(() => {
+    const m = {};
+    tasks.forEach(t => {
+      if (t.clientId) m[t.clientId] = (m[t.clientId] || 0) + 1;
+    });
     return m;
   }, [tasks]);
   const today = todayISO();
@@ -407,6 +452,7 @@ function Plandia() {
     const all = [];
     tasks.forEach(task => {
       if (activeCategory && task.categoryId !== activeCategory) return;
+      if (activeClient && task.clientId !== activeClient) return;
       occurrences(task, rangeStart, rangeEnd).forEach(date => {
         const key = `${task.id}__${date}`;
         const status = overrides[key] || "pending";
@@ -431,7 +477,7 @@ function Plandia() {
       return a.task.title.localeCompare(b.task.title);
     });
     return filtered;
-  }, [tasks, overrides, view, activeCategory, today, catById]);
+  }, [tasks, overrides, view, activeCategory, activeClient, today, catById]);
   const groups = useMemo(() => {
     const g = [];
     let lastDate = null;
@@ -454,6 +500,7 @@ function Plandia() {
     const byCat = {};
     tasks.forEach(task => {
       if (activeCategory && task.categoryId !== activeCategory) return;
+      if (activeClient && task.clientId !== activeClient) return;
       const occ = occurrences(task, rangeStart, rangeEnd);
       let refDate = occ.find(d => d >= today);
       if (!refDate) refDate = occ.length ? occ[occ.length - 1] : task.startDate;
@@ -479,7 +526,7 @@ function Plandia() {
       return a.task.title.localeCompare(b.task.title);
     }));
     return catList;
-  }, [tasks, overrides, categories, activeCategory, today]);
+  }, [tasks, overrides, categories, activeCategory, activeClient, today]);
   const kpiData = useMemo(() => {
     const rangeStart = kpiScope === "mes" ? firstDayOfMonthISO(today) : addDaysISO(today, -3650);
     const rangeEnd = kpiScope === "mes" ? lastDayOfMonthISO(today) : addDaysISO(today, 3650);
@@ -546,6 +593,32 @@ function Plandia() {
     if (activeCategory === id) setActiveCategory(null);
     setConfirmingCatDelete(null);
   };
+  const addClient = (name, color) => {
+    const id = uid("cl");
+    setClients(cs => [...cs, {
+      id,
+      name,
+      color
+    }]);
+    return id;
+  };
+  const updateClient = (id, name, color) => {
+    setClients(cs => cs.map(c => c.id === id ? {
+      ...c,
+      name,
+      color
+    } : c));
+    setEditingClient(null);
+  };
+  const deleteClient = id => {
+    setClients(cs => cs.filter(c => c.id !== id));
+    setTasks(ts => ts.map(t => t.clientId === id ? {
+      ...t,
+      clientId: null
+    } : t));
+    if (activeClient === id) setActiveClient(null);
+    setConfirmingClientDelete(null);
+  };
   const addTask = async (data, syncCalendar) => {
     const id = uid("t");
     const task = {
@@ -576,6 +649,66 @@ function Plandia() {
       } catch (e) {
         console.error(e);
         patchTask(id, {
+          gcal: {
+            status: "error",
+            eventId: null
+          }
+        });
+      }
+    }
+  };
+  const editTask = async (taskId, data, syncCalendar) => {
+    const existing = tasks.find(t => t.id === taskId);
+    if (!existing) return;
+    const merged = {
+      ...existing,
+      ...data
+    };
+    setTasks(ts => ts.map(t => t.id === taskId ? merged : t));
+    if (!syncCalendar || !gcalToken) return;
+    if (merged.gcal && merged.gcal.eventId) {
+      const eventId = merged.gcal.eventId;
+      patchTask(taskId, {
+        gcal: {
+          status: "syncing",
+          eventId
+        }
+      });
+      try {
+        await gcalUpdateEvent(gcalToken, eventId, merged);
+        patchTask(taskId, {
+          gcal: {
+            status: "synced",
+            eventId
+          }
+        });
+      } catch (e) {
+        console.error(e);
+        patchTask(taskId, {
+          gcal: {
+            status: "error",
+            eventId: null
+          }
+        });
+      }
+    } else {
+      patchTask(taskId, {
+        gcal: {
+          status: "syncing",
+          eventId: null
+        }
+      });
+      try {
+        const eventId = await gcalInsertEvent(gcalToken, merged);
+        patchTask(taskId, {
+          gcal: {
+            status: "synced",
+            eventId
+          }
+        });
+      } catch (e) {
+        console.error(e);
+        patchTask(taskId, {
           gcal: {
             status: "error",
             eventId: null
@@ -849,7 +982,99 @@ function Plandia() {
     onClick: () => setShowCatForm(true)
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 13
-  }, "+"), " Nueva categoría")), /*#__PURE__*/React.createElement("main", {
+  }, "+"), " Nueva categoría"), /*#__PURE__*/React.createElement("div", {
+    style: styles.sideDivider
+  }), /*#__PURE__*/React.createElement("div", {
+    style: styles.sideLabel
+  }, "Clientes"), clients.length > 0 && /*#__PURE__*/React.createElement("button", {
+    className: "pld-cat-btn",
+    onClick: () => setActiveClient(null),
+    style: {
+      ...styles.catRow,
+      ...(activeClient === null ? styles.catRowActive : {})
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13,
+    style: {
+      opacity: 0.6
+    }
+  }, "▤"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      textAlign: "left"
+    }
+  }, "Todos"), /*#__PURE__*/React.createElement("span", {
+    style: styles.countPill
+  }, tasks.filter(t => t.clientId).length)), clients.map(c => editingClient === c.id ? /*#__PURE__*/React.createElement(NewCategoryForm, {
+    key: c.id,
+    initialName: c.name,
+    initialColor: c.color,
+    saveLabel: "Guardar",
+    onCancel: () => setEditingClient(null),
+    onSave: (name, color) => updateClient(c.id, name, color)
+  }) : /*#__PURE__*/React.createElement("button", {
+    key: c.id,
+    className: "pld-cat-btn",
+    onClick: () => setActiveClient(c.id),
+    style: {
+      ...styles.catRow,
+      ...(activeClient === c.id ? styles.catRowActive : {})
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: "50%",
+      background: c.color,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      textAlign: "left",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, c.name), /*#__PURE__*/React.createElement("span", {
+    style: styles.countPill
+  }, clientTaskCounts[c.id] || 0), /*#__PURE__*/React.createElement("span", {
+    onClick: e => {
+      e.stopPropagation();
+      setEditingClient(c.id);
+    },
+    style: styles.rowDelete,
+    title: "Editar cliente"
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "✎")), confirmingClientDelete === c.id ? /*#__PURE__*/React.createElement("span", {
+    onClick: e => {
+      e.stopPropagation();
+      deleteClient(c.id);
+    },
+    style: styles.confirmChip
+  }, "confirmar") : /*#__PURE__*/React.createElement("span", {
+    onClick: e => {
+      e.stopPropagation();
+      setConfirmingClientDelete(c.id);
+      setTimeout(() => setConfirmingClientDelete(v => v === c.id ? null : v), 2500);
+    },
+    style: styles.rowDelete,
+    title: "Eliminar cliente"
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "🗑")))), showClientForm ? /*#__PURE__*/React.createElement(NewCategoryForm, {
+    onCancel: () => setShowClientForm(false),
+    onSave: (name, color) => {
+      addClient(name, color);
+      setShowClientForm(false);
+    }
+  }) : /*#__PURE__*/React.createElement("button", {
+    style: styles.addCatBtn,
+    onClick: () => setShowClientForm(true)
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, "+"), " Nuevo cliente")), /*#__PURE__*/React.createElement("main", {
     style: styles.main
   }, /*#__PURE__*/React.createElement("header", {
     style: styles.header
@@ -875,18 +1100,24 @@ function Plandia() {
     size: 13
   }, gcalConnecting ? "⟳" : "🗓"), " ", gcalConnecting ? "Conectando…" : "Conectar Google Calendar"), view !== "kpi" && /*#__PURE__*/React.createElement("button", {
     style: styles.newBtn,
-    onClick: () => setShowForm(v => !v)
+    onClick: () => setFormState(f => f ? null : {
+      mode: "create",
+      task: null
+    })
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 15
   }, "+"), " Nueva tarea"))), gcalError && /*#__PURE__*/React.createElement("div", {
     style: styles.gcalErrorBanner
-  }, gcalError), showForm && view !== "kpi" && /*#__PURE__*/React.createElement(NewTaskForm, {
+  }, gcalError), formState && view !== "kpi" && /*#__PURE__*/React.createElement(NewTaskForm, {
     categories: categories,
+    clients: clients,
     gcalConnected: !!gcalToken,
-    onCancel: () => setShowForm(false),
+    mode: formState.mode,
+    initialTask: formState.task,
+    onCancel: () => setFormState(null),
     onSave: (data, sync) => {
-      addTask(data, sync);
-      setShowForm(false);
+      if (formState.mode === "edit") editTask(formState.task.id, data, sync);else addTask(data, sync);
+      setFormState(null);
     }
   }), /*#__PURE__*/React.createElement("div", {
     className: "pld-scroll",
@@ -926,6 +1157,7 @@ function Plandia() {
     key: it.key,
     it: it,
     cat: catById[it.task.categoryId],
+    client: clientById[it.task.clientId],
     expanded: expanded,
     setExpanded: setExpanded,
     setStatus: setStatus,
@@ -935,6 +1167,7 @@ function Plandia() {
     retrySync: retrySync,
     unsyncFromCalendar: unsyncFromCalendar,
     gcalConnected: !!gcalToken,
+    setFormState: setFormState,
     confirmingDelete: confirmingDelete,
     setConfirmingDelete: setConfirmingDelete,
     showDate: false,
@@ -962,6 +1195,7 @@ function Plandia() {
     key: it.key,
     it: it,
     cat: cg.category,
+    client: clientById[it.task.clientId],
     expanded: expanded,
     setExpanded: setExpanded,
     setStatus: setStatus,
@@ -971,6 +1205,7 @@ function Plandia() {
     retrySync: retrySync,
     unsyncFromCalendar: unsyncFromCalendar,
     gcalConnected: !!gcalToken,
+    setFormState: setFormState,
     confirmingDelete: confirmingDelete,
     setConfirmingDelete: setConfirmingDelete,
     showDate: true,
@@ -980,6 +1215,7 @@ function Plandia() {
 function TaskRow({
   it,
   cat,
+  client,
   expanded,
   setExpanded,
   setStatus,
@@ -989,6 +1225,7 @@ function TaskRow({
   retrySync,
   unsyncFromCalendar,
   gcalConnected,
+  setFormState,
   confirmingDelete,
   setConfirmingDelete,
   showDate,
@@ -1068,7 +1305,17 @@ function TaskRow({
       fontSize: 13,
       fontWeight: 600
     }
-  }, cat.name), showDate && /*#__PURE__*/React.createElement("span", null, dateLabel(it.date, today)), urg && /*#__PURE__*/React.createElement("span", {
+  }, cat.name), client && /*#__PURE__*/React.createElement("span", {
+    style: styles.clientChip
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: "50%",
+      background: client.color,
+      display: "inline-block"
+    }
+  }), " ", client.name), showDate && /*#__PURE__*/React.createElement("span", null, dateLabel(it.date, today)), urg && /*#__PURE__*/React.createElement("span", {
     style: {
       color: urg.color,
       fontWeight: 500
@@ -1097,6 +1344,30 @@ function TaskRow({
     onSync: () => retrySync(it.task),
     onUnsync: () => unsyncFromCalendar(it.task)
   }))), /*#__PURE__*/React.createElement("button", {
+    onClick: e => {
+      e.stopPropagation();
+      setFormState({
+        mode: "duplicate",
+        task: it.task
+      });
+    },
+    title: "Duplicar tarea",
+    style: styles.iconBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "⧉")), /*#__PURE__*/React.createElement("button", {
+    onClick: e => {
+      e.stopPropagation();
+      setFormState({
+        mode: "edit",
+        task: it.task
+      });
+    },
+    title: "Editar tarea",
+    style: styles.iconBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "✎")), /*#__PURE__*/React.createElement("button", {
     onClick: () => setStatus(it.key, "cancelled"),
     title: cancelled ? "Reabrir esta instancia" : "Cancelar solo esta instancia",
     style: {
@@ -1473,23 +1744,30 @@ function NewCategoryForm({
 }
 function NewTaskForm({
   categories,
+  clients,
   gcalConnected,
+  initialTask,
+  mode,
   onCancel,
   onSave
 }) {
-  const [title, setTitle] = useState("");
-  const [categoryId, setCategoryId] = useState(categories[0]?.id || "");
-  const [startDate, setStartDate] = useState(todayISO());
-  const [recType, setRecType] = useState("none");
-  const [interval, setIntervalV] = useState(1);
-  const [notes, setNotes] = useState("");
+  const seed = initialTask || {};
+  const [title, setTitle] = useState(seed.title || "");
+  const [categoryId, setCategoryId] = useState(seed.categoryId || categories[0]?.id || "");
+  const [clientId, setClientId] = useState(seed.clientId || "");
+  const [startDate, setStartDate] = useState(seed.startDate || todayISO());
+  const [recType, setRecType] = useState(seed.recurrence && seed.recurrence.type || "none");
+  const [interval, setIntervalV] = useState(seed.recurrence && seed.recurrence.interval || 1);
+  const [notes, setNotes] = useState(seed.notes || "");
   const [error, setError] = useState("");
-  const [subtasks, setSubtasks] = useState([]);
-  const [useCTA, setUseCTA] = useState(false);
-  const [ctaLabel, setCtaLabel] = useState("Contactar cliente");
-  const [urgency, setUrgency] = useState("media");
-  const [promisedDate, setPromisedDate] = useState("");
-  const [syncCalendar, setSyncCalendar] = useState(false);
+  const [subtasks, setSubtasks] = useState(seed.subtasks ? seed.subtasks.map(s => ({
+    ...s
+  })) : []);
+  const [useCTA, setUseCTA] = useState(!!seed.cta);
+  const [ctaLabel, setCtaLabel] = useState(seed.cta && seed.cta.label || "Contactar cliente");
+  const [urgency, setUrgency] = useState(seed.urgency || "media");
+  const [promisedDate, setPromisedDate] = useState(seed.promisedDate || "");
+  const [syncCalendar, setSyncCalendar] = useState(mode === "edit" ? !!(seed.gcal && seed.gcal.eventId) : false);
   useEffect(() => {
     if (!categoryId && categories.length) setCategoryId(categories[0].id);
   }, [categories]); // eslint-disable-line
@@ -1519,12 +1797,13 @@ function NewTaskForm({
       title: s.title.trim(),
       driveUrl: s.driveUrl.trim(),
       dueDate: s.dueDate || null,
-      done: false
+      done: !!s.done
     }));
     onSave({
       title: title.trim(),
       notes: notes.trim(),
       categoryId,
+      clientId: clientId || null,
       startDate,
       recurrence: recType === "none" ? {
         type: "none"
@@ -1535,7 +1814,7 @@ function NewTaskForm({
       subtasks: cleanSubtasks,
       cta: useCTA ? {
         label: ctaLabel.trim() || "Contactar cliente",
-        done: false
+        done: seed.cta && seed.cta.done || false
       } : null,
       urgency,
       promisedDate: promisedDate || null
@@ -1543,7 +1822,11 @@ function NewTaskForm({
   };
   return /*#__PURE__*/React.createElement("div", {
     style: styles.formPanel
-  }, /*#__PURE__*/React.createElement("input", {
+  }, mode === "edit" && /*#__PURE__*/React.createElement("div", {
+    style: styles.formModeTag
+  }, "Editando tarea"), mode === "duplicate" && /*#__PURE__*/React.createElement("div", {
+    style: styles.formModeTag
+  }, "Duplicando tarea — ajustá lo que haga falta"), /*#__PURE__*/React.createElement("input", {
     autoFocus: true,
     placeholder: "Título de la tarea",
     value: title,
@@ -1568,6 +1851,19 @@ function NewTaskForm({
     value: "",
     disabled: true
   }, "Elegí una categoría"), categories.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.name)))), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Cliente (opcional)"), /*#__PURE__*/React.createElement("select", {
+    value: clientId,
+    onChange: e => setClientId(e.target.value),
+    style: styles.formSelect
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Sin cliente"), clients.map(c => /*#__PURE__*/React.createElement("option", {
     key: c.id,
     value: c.id
   }, c.name)))), /*#__PURE__*/React.createElement("label", {
@@ -1658,7 +1954,7 @@ function NewTaskForm({
     }
   }), /*#__PURE__*/React.createElement("input", {
     type: "date",
-    value: s.dueDate,
+    value: s.dueDate || "",
     onChange: e => updateSubtask(s.id, {
       dueDate: e.target.value
     }),
@@ -1670,7 +1966,7 @@ function NewTaskForm({
     title: "Fecha de vencimiento"
   }), /*#__PURE__*/React.createElement("input", {
     placeholder: "Link de Drive (opcional)",
-    value: s.driveUrl,
+    value: s.driveUrl || "",
     onChange: e => updateSubtask(s.id, {
       driveUrl: e.target.value
     }),
@@ -1709,7 +2005,7 @@ function NewTaskForm({
     type: "checkbox",
     checked: syncCalendar,
     onChange: e => setSyncCalendar(e.target.checked)
-  }), " Sincronizar con Google Calendar") : /*#__PURE__*/React.createElement("div", {
+  }), mode === "edit" && seed.gcal && seed.gcal.eventId ? "Actualizar (republicar) el evento en Google Calendar" : "Sincronizar con Google Calendar") : /*#__PURE__*/React.createElement("div", {
     style: {
       ...styles.noCategoryHint,
       marginBottom: 8
@@ -2298,6 +2594,28 @@ const styles = {
     borderRadius: 8,
     padding: "8px 12px",
     fontSize: 12.5
+  },
+  clientChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    background: PAPER_2,
+    borderRadius: 20,
+    padding: "1px 8px 1px 6px",
+    fontWeight: 500,
+    color: "#4C475A"
+  },
+  formModeTag: {
+    display: "inline-block",
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: ACCENT,
+    background: "#F3E9F1",
+    borderRadius: 6,
+    padding: "3px 9px",
+    marginBottom: 10,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em"
   },
   loginWrap: {
     display: "flex",
