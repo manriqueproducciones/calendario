@@ -1,0 +1,2250 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bitácora</title>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap');
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #DCD9D2; font-family: 'IBM Plex Sans', sans-serif; }
+  #root { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pld-row:hover { background: #F7F6F4; }
+  .pld-scroll::-webkit-scrollbar { width: 8px; }
+  .pld-scroll::-webkit-scrollbar-thumb { background: #E3E1E6; border-radius: 8px; }
+  .pld-cat-btn:hover { background: #F7F6F4; }
+  input, select, textarea, button { font-family: 'IBM Plex Sans', sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useRef
+} = React;
+
+// ---------- shim de storage: localStorage en vez de window.storage de Claude ----------
+window.storage = {
+  get: async key => {
+    const v = localStorage.getItem(key);
+    if (v === null) throw new Error("not found");
+    return {
+      key,
+      value: v,
+      shared: false
+    };
+  },
+  set: async (key, value) => {
+    localStorage.setItem(key, value);
+    return {
+      key,
+      value,
+      shared: false
+    };
+  },
+  delete: async key => {
+    localStorage.removeItem(key);
+    return {
+      key,
+      deleted: true,
+      shared: false
+    };
+  }
+};
+
+// ---------- iconos simples (sin dependencias externas) ----------
+const Ic = ({
+  children,
+  size = 14,
+  spin,
+  style,
+  title
+}) => /*#__PURE__*/React.createElement("span", {
+  title: title,
+  style: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: size,
+    lineHeight: 1,
+    flexShrink: 0,
+    ...(spin ? {
+      animation: "spin 0.9s linear infinite"
+    } : {}),
+    ...style
+  }
+}, children);
+
+// ---------- date helpers ----------
+const pad = n => String(n).padStart(2, "0");
+const toISO = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseISO = s => {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+const todayISO = () => toISO(new Date());
+const addDaysISO = (iso, n) => {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + n);
+  return toISO(d);
+};
+const addMonthsISO = (iso, n, day) => {
+  const d = parseISO(iso);
+  return toISO(new Date(d.getFullYear(), d.getMonth() + n, day));
+};
+const diffDays = (aISO, bISO) => Math.round((parseISO(bISO) - parseISO(aISO)) / 86400000);
+const firstDayOfMonthISO = iso => {
+  const d = parseISO(iso);
+  return toISO(new Date(d.getFullYear(), d.getMonth(), 1));
+};
+const lastDayOfMonthISO = iso => {
+  const d = parseISO(iso);
+  return toISO(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+};
+const fmtShort = iso => new Intl.DateTimeFormat("es-AR", {
+  day: "numeric",
+  month: "short"
+}).format(parseISO(iso));
+const fmtWeekday = iso => {
+  const s = new Intl.DateTimeFormat("es-AR", {
+    weekday: "long"
+  }).format(parseISO(iso));
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
+const fmtLong = iso => new Intl.DateTimeFormat("es-AR", {
+  day: "numeric",
+  month: "long",
+  year: "numeric"
+}).format(parseISO(iso));
+const fmtDateTime = ts => new Intl.DateTimeFormat("es-AR", {
+  day: "numeric",
+  month: "short",
+  year: "numeric"
+}).format(new Date(ts));
+function dateLabel(iso, today) {
+  const diff = diffDays(today, iso);
+  if (diff === 0) return "Hoy";
+  if (diff === 1) return "Mañana";
+  if (diff < 0) return `Vencida · ${fmtShort(iso)}`;
+  if (diff > 1 && diff < 7) return fmtWeekday(iso);
+  return fmtShort(iso);
+}
+function occurrences(task, rangeStart, rangeEnd) {
+  const rec = task.recurrence || {
+    type: "none"
+  };
+  const out = [];
+  if (rec.type === "none") {
+    if (task.startDate >= rangeStart && task.startDate <= rangeEnd) out.push(task.startDate);
+    return out;
+  }
+  const interval = Math.max(1, rec.interval || 1);
+  if (rec.type === "daily") {
+    const step = interval;
+    let offset = diffDays(task.startDate, rangeStart);
+    let startOffset = offset > 0 ? Math.ceil(offset / step) * step : 0;
+    let d = addDaysISO(task.startDate, startOffset);
+    while (d <= rangeEnd) {
+      if (d >= rangeStart) out.push(d);
+      d = addDaysISO(d, step);
+    }
+  } else if (rec.type === "weekly") {
+    const step = 7 * interval;
+    let offset = diffDays(task.startDate, rangeStart);
+    let startOffset = offset > 0 ? Math.ceil(offset / step) * step : 0;
+    let d = addDaysISO(task.startDate, startOffset);
+    while (d <= rangeEnd) {
+      if (d >= rangeStart) out.push(d);
+      d = addDaysISO(d, step);
+    }
+  } else if (rec.type === "monthly") {
+    const [,, dayStr] = task.startDate.split("-");
+    const day = Number(dayStr);
+    let n = 0;
+    let d = task.startDate;
+    while (d < rangeStart) {
+      n += interval;
+      d = addMonthsISO(task.startDate, n, day);
+    }
+    while (d <= rangeEnd) {
+      out.push(d);
+      n += interval;
+      d = addMonthsISO(task.startDate, n, day);
+    }
+  }
+  return out;
+}
+const RECURRENCE_LABEL = rec => {
+  if (!rec || rec.type === "none") return null;
+  const n = rec.interval || 1;
+  if (rec.type === "daily") return n === 1 ? "Cada día" : `Cada ${n} días`;
+  if (rec.type === "weekly") return n === 1 ? "Cada semana" : `Cada ${n} semanas`;
+  if (rec.type === "monthly") return n === 1 ? "Cada mes" : `Cada ${n} meses`;
+  return null;
+};
+const CATEGORY_COLORS = [{
+  name: "malva",
+  hex: "#8B4F82"
+}, {
+  name: "tinta",
+  hex: "#2C1B45"
+}, {
+  name: "gris",
+  hex: "#8A8A93"
+}, {
+  name: "malva claro",
+  hex: "#B27CA8"
+}, {
+  name: "verde bosque",
+  hex: "#4F6B52"
+}, {
+  name: "azul acero",
+  hex: "#4A5A72"
+}, {
+  name: "borgoña",
+  hex: "#7A3B45"
+}, {
+  name: "arena",
+  hex: "#A68A5B"
+}, {
+  name: "petróleo",
+  hex: "#33566B"
+}, {
+  name: "óxido",
+  hex: "#B0503A"
+}];
+const URGENCY = {
+  alta: {
+    label: "Alta",
+    rank: 0,
+    color: "#C1442D"
+  },
+  media: {
+    label: "Media",
+    rank: 1,
+    color: "#C98A2A"
+  },
+  baja: {
+    label: "Baja",
+    rank: 2,
+    color: "#8A8A93"
+  }
+};
+const urgencyRank = u => URGENCY[u] ? URGENCY[u].rank : 3;
+const uid = p => p + "_" + Math.random().toString(36).slice(2, 9);
+const STORAGE_KEY = "bitacora-standalone-v1";
+
+// ---------- Google Calendar (OAuth directo, sin backend) ----------
+const GCAL_CLIENT_ID = "431629068496-eius4r3k5h4il1g1ehclm7jmmg70g6jh.apps.googleusercontent.com";
+const GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+function buildRRule(rec) {
+  if (!rec || rec.type === "none") return null;
+  const interval = Math.max(1, rec.interval || 1);
+  const freq = rec.type === "daily" ? "DAILY" : rec.type === "weekly" ? "WEEKLY" : "MONTHLY";
+  return `RRULE:FREQ=${freq};INTERVAL=${interval}`;
+}
+async function gcalInsertEvent(token, task) {
+  const body = {
+    summary: task.title,
+    description: task.notes || undefined,
+    start: {
+      date: task.startDate
+    },
+    end: {
+      date: addDaysISO(task.startDate, 1)
+    }
+  };
+  const rrule = buildRRule(task.recurrence);
+  if (rrule) body.recurrence = [rrule];
+  const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error && err.error.message || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return data.id;
+}
+async function gcalDeleteEvent(token, eventId) {
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  if (!res.ok && res.status !== 410 && res.status !== 404) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error && err.error.message || `HTTP ${res.status}`);
+  }
+}
+function Plandia() {
+  const [loaded, setLoaded] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [overrides, setOverrides] = useState({});
+  const [view, setView] = useState("hoy");
+  const [activeCategory, setActiveCategory] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(null);
+  const [confirmingCatDelete, setConfirmingCatDelete] = useState(null);
+  const [showCatForm, setShowCatForm] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [expanded, setExpanded] = useState({});
+  const [kpiScope, setKpiScope] = useState("todo");
+  const [gcalToken, setGcalToken] = useState(null);
+  const [gcalConnecting, setGcalConnecting] = useState(false);
+  const [gcalError, setGcalError] = useState("");
+  const gcalTokenClient = useRef(null);
+  const saveTimer = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    function init() {
+      if (cancelled) return;
+      if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+        gcalTokenClient.current = window.google.accounts.oauth2.initTokenClient({
+          client_id: GCAL_CLIENT_ID,
+          scope: GCAL_SCOPE,
+          callback: resp => {
+            setGcalConnecting(false);
+            if (resp && resp.access_token) {
+              setGcalToken(resp.access_token);
+              setGcalError("");
+            } else setGcalError("No se pudo conectar. Probá de nuevo.");
+          }
+        });
+      } else {
+        setTimeout(init, 300);
+      }
+    }
+    init();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const connectGcal = () => {
+    if (!gcalTokenClient.current) {
+      setGcalError("Todavía está cargando Google, esperá un segundo y probá de nuevo.");
+      return;
+    }
+    setGcalConnecting(true);
+    setGcalError("");
+    gcalTokenClient.current.requestAccessToken();
+    setTimeout(() => {
+      setGcalConnecting(c => {
+        if (c) setGcalError("No respondió a tiempo. Revisá que el pop-up no esté bloqueado y que tu cuenta esté agregada como usuario de prueba en Google Cloud.");
+        return false;
+      });
+    }, 20000);
+  };
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get(STORAGE_KEY);
+        if (res && res.value) {
+          const data = JSON.parse(res.value);
+          setCategories(data.categories || []);
+          setTasks(data.tasks || []);
+          setOverrides(data.overrides || {});
+        }
+      } catch (e) {/* sin datos guardados */}
+      setLoaded(true);
+    })();
+  }, []);
+  useEffect(() => {
+    if (!loaded) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await window.storage.set(STORAGE_KEY, JSON.stringify({
+          categories,
+          tasks,
+          overrides
+        }));
+      } catch (e) {
+        console.error("No se pudo guardar", e);
+      }
+    }, 300);
+    return () => clearTimeout(saveTimer.current);
+  }, [categories, tasks, overrides, loaded]);
+  const catById = useMemo(() => {
+    const m = {};
+    categories.forEach(c => m[c.id] = c);
+    return m;
+  }, [categories]);
+  const taskCounts = useMemo(() => {
+    const m = {};
+    tasks.forEach(t => m[t.categoryId] = (m[t.categoryId] || 0) + 1);
+    return m;
+  }, [tasks]);
+  const today = todayISO();
+  const items = useMemo(() => {
+    const rangeStart = addDaysISO(today, -21);
+    const rangeEnd = addDaysISO(today, 45);
+    const all = [];
+    tasks.forEach(task => {
+      if (activeCategory && task.categoryId !== activeCategory) return;
+      occurrences(task, rangeStart, rangeEnd).forEach(date => {
+        const key = `${task.id}__${date}`;
+        const status = overrides[key] || "pending";
+        all.push({
+          key,
+          task,
+          date,
+          status
+        });
+      });
+    });
+    let filtered;
+    if (view === "hoy") filtered = all.filter(i => i.date === today || i.date < today && i.status === "pending");else if (view === "proximos") filtered = all.filter(i => i.date > today && i.date <= addDaysISO(today, 30));else filtered = all;
+    filtered.sort((a, b) => {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      const ua = urgencyRank(a.task.urgency),
+        ub = urgencyRank(b.task.urgency);
+      if (ua !== ub) return ua - ub;
+      const ca = catById[a.task.categoryId]?.name || "",
+        cb = catById[b.task.categoryId]?.name || "";
+      if (ca !== cb) return ca < cb ? -1 : 1;
+      return a.task.title.localeCompare(b.task.title);
+    });
+    return filtered;
+  }, [tasks, overrides, view, activeCategory, today, catById]);
+  const groups = useMemo(() => {
+    const g = [];
+    let lastDate = null;
+    items.forEach(it => {
+      if (it.date !== lastDate) {
+        g.push({
+          date: it.date,
+          label: dateLabel(it.date, today),
+          rows: []
+        });
+        lastDate = it.date;
+      }
+      g[g.length - 1].rows.push(it);
+    });
+    return g;
+  }, [items, today]);
+  const categoryGroups = useMemo(() => {
+    const rangeStart = addDaysISO(today, -21),
+      rangeEnd = addDaysISO(today, 60);
+    const byCat = {};
+    tasks.forEach(task => {
+      if (activeCategory && task.categoryId !== activeCategory) return;
+      const occ = occurrences(task, rangeStart, rangeEnd);
+      let refDate = occ.find(d => d >= today);
+      if (!refDate) refDate = occ.length ? occ[occ.length - 1] : task.startDate;
+      const key = `${task.id}__${refDate}`;
+      const status = overrides[key] || "pending";
+      const catKey = task.categoryId || "__sin__";
+      if (!byCat[catKey]) byCat[catKey] = [];
+      byCat[catKey].push({
+        key,
+        task,
+        date: refDate,
+        status
+      });
+    });
+    const catList = categories.filter(c => !activeCategory || c.id === activeCategory).map(c => ({
+      category: c,
+      rows: byCat[c.id] || []
+    })).filter(g => g.rows.length > 0);
+    catList.forEach(g => g.rows.sort((a, b) => {
+      const ua = urgencyRank(a.task.urgency),
+        ub = urgencyRank(b.task.urgency);
+      if (ua !== ub) return ua - ub;
+      return a.task.title.localeCompare(b.task.title);
+    }));
+    return catList;
+  }, [tasks, overrides, categories, activeCategory, today]);
+  const kpiData = useMemo(() => {
+    const rangeStart = kpiScope === "mes" ? firstDayOfMonthISO(today) : addDaysISO(today, -3650);
+    const rangeEnd = kpiScope === "mes" ? lastDayOfMonthISO(today) : addDaysISO(today, 3650);
+    const byCat = {};
+    categories.forEach(c => {
+      byCat[c.id] = {
+        category: c,
+        done: 0,
+        pending: 0,
+        cancelled: 0,
+        overdue: 0,
+        total: 0
+      };
+    });
+    tasks.forEach(task => {
+      const stat = byCat[task.categoryId];
+      if (!stat) return;
+      occurrences(task, rangeStart, rangeEnd).forEach(date => {
+        const key = `${task.id}__${date}`;
+        const status = overrides[key] || "pending";
+        stat.total++;
+        if (status === "done") stat.done++;else if (status === "cancelled") stat.cancelled++;else {
+          stat.pending++;
+          if (date < today) stat.overdue++;
+        }
+      });
+    });
+    return Object.values(byCat).filter(s => s.total > 0);
+  }, [tasks, overrides, categories, kpiScope, today]);
+  const patchTask = (id, patch) => setTasks(ts => ts.map(t => t.id === id ? {
+    ...t,
+    ...(typeof patch === "function" ? patch(t) : patch)
+  } : t));
+  const addCategory = (name, color) => {
+    const id = uid("c");
+    setCategories(cs => [...cs, {
+      id,
+      name,
+      color
+    }]);
+    return id;
+  };
+  const updateCategory = (id, name, color) => {
+    setCategories(cs => cs.map(c => c.id === id ? {
+      ...c,
+      name,
+      color
+    } : c));
+    setEditingCategory(null);
+  };
+  const deleteCategory = id => {
+    setCategories(cs => cs.filter(c => c.id !== id));
+    const idsToRemove = new Set(tasks.filter(t => t.categoryId === id).map(t => t.id));
+    setTasks(ts => ts.filter(t => t.categoryId !== id));
+    setOverrides(ov => {
+      const next = {
+        ...ov
+      };
+      Object.keys(next).forEach(k => {
+        if (idsToRemove.has(k.split("__")[0])) delete next[k];
+      });
+      return next;
+    });
+    if (activeCategory === id) setActiveCategory(null);
+    setConfirmingCatDelete(null);
+  };
+  const addTask = async (data, syncCalendar) => {
+    const id = uid("t");
+    const task = {
+      id,
+      createdAt: Date.now(),
+      gcal: {
+        status: "idle",
+        eventId: null
+      },
+      ...data
+    };
+    setTasks(ts => [...ts, task]);
+    if (syncCalendar && gcalToken) {
+      patchTask(id, {
+        gcal: {
+          status: "syncing",
+          eventId: null
+        }
+      });
+      try {
+        const eventId = await gcalInsertEvent(gcalToken, task);
+        patchTask(id, {
+          gcal: {
+            status: "synced",
+            eventId
+          }
+        });
+      } catch (e) {
+        console.error(e);
+        patchTask(id, {
+          gcal: {
+            status: "error",
+            eventId: null
+          }
+        });
+      }
+    }
+  };
+  const deleteTask = task => {
+    setTasks(ts => ts.filter(t => t.id !== task.id));
+    setOverrides(ov => {
+      const next = {
+        ...ov
+      };
+      Object.keys(next).forEach(k => {
+        if (k.split("__")[0] === task.id) delete next[k];
+      });
+      return next;
+    });
+    setConfirmingDelete(null);
+    if (task.gcal && task.gcal.eventId && gcalToken) {
+      gcalDeleteEvent(gcalToken, task.gcal.eventId).catch(e => console.error("No se pudo borrar el evento", e));
+    }
+  };
+  const retrySync = async task => {
+    if (!gcalToken) {
+      setGcalError("Conectá Google Calendar primero (botón arriba a la derecha).");
+      return;
+    }
+    patchTask(task.id, {
+      gcal: {
+        status: "syncing",
+        eventId: null
+      }
+    });
+    try {
+      const eventId = await gcalInsertEvent(gcalToken, task);
+      patchTask(task.id, {
+        gcal: {
+          status: "synced",
+          eventId
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      patchTask(task.id, {
+        gcal: {
+          status: "error",
+          eventId: null
+        }
+      });
+    }
+  };
+  const unsyncFromCalendar = async task => {
+    if (!task.gcal || !task.gcal.eventId) return;
+    const eventId = task.gcal.eventId;
+    patchTask(task.id, {
+      gcal: {
+        status: "syncing",
+        eventId: null
+      }
+    });
+    try {
+      if (gcalToken) await gcalDeleteEvent(gcalToken, eventId);
+      patchTask(task.id, {
+        gcal: {
+          status: "idle",
+          eventId: null
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      patchTask(task.id, {
+        gcal: {
+          status: "synced",
+          eventId
+        }
+      });
+      setGcalError("No se pudo quitar el evento del calendario. Probá de nuevo.");
+    }
+  };
+  const setStatus = (key, newStatus) => setOverrides(ov => {
+    const current = ov[key] || "pending";
+    const next = {
+      ...ov
+    };
+    if (current === newStatus) delete next[key];else next[key] = newStatus;
+    return next;
+  });
+  const toggleSubtask = (taskId, subId) => patchTask(taskId, t => ({
+    subtasks: t.subtasks.map(s => s.id === subId ? {
+      ...s,
+      done: !s.done
+    } : s)
+  }));
+  const toggleCTA = taskId => patchTask(taskId, t => ({
+    cta: {
+      ...t.cta,
+      done: !t.cta.done
+    }
+  }));
+  if (!loaded) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: styles.loadingWrap
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 20,
+      spin: true
+    }, "⟳"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: 10,
+        fontSize: 14,
+        color: "#8A8A93"
+      }
+    }, "Cargando bitácora…"));
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: styles.app
+  }, /*#__PURE__*/React.createElement("aside", {
+    style: styles.sidebar
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.brand
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.brandMark
+  }, "◆"), " Bitácora"), /*#__PURE__*/React.createElement("div", {
+    style: styles.offlineTag
+  }, "Versión local — sin sync de Calendar"), /*#__PURE__*/React.createElement("nav", {
+    style: {
+      marginTop: 16
+    }
+  }, [["hoy", "Hoy"], ["proximos", "Próximos"], ["todo", "Todo"], ["categoria", "Por categoría"], ["kpi", "KPI"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setView(key),
+    style: {
+      ...styles.navBtn,
+      ...(view === key ? styles.navBtnActive : {})
+    }
+  }, label))), /*#__PURE__*/React.createElement("div", {
+    style: styles.sideDivider
+  }), /*#__PURE__*/React.createElement("div", {
+    style: styles.sideLabel
+  }, "Categorías"), /*#__PURE__*/React.createElement("button", {
+    className: "pld-cat-btn",
+    onClick: () => setActiveCategory(null),
+    style: {
+      ...styles.catRow,
+      ...(activeCategory === null ? styles.catRowActive : {})
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13,
+    style: {
+      opacity: 0.6
+    }
+  }, "▤"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      textAlign: "left"
+    }
+  }, "Todas"), /*#__PURE__*/React.createElement("span", {
+    style: styles.countPill
+  }, tasks.length)), categories.map(c => editingCategory === c.id ? /*#__PURE__*/React.createElement(NewCategoryForm, {
+    key: c.id,
+    initialName: c.name,
+    initialColor: c.color,
+    saveLabel: "Guardar",
+    onCancel: () => setEditingCategory(null),
+    onSave: (name, color) => updateCategory(c.id, name, color)
+  }) : /*#__PURE__*/React.createElement("button", {
+    key: c.id,
+    className: "pld-cat-btn",
+    onClick: () => setActiveCategory(c.id),
+    style: {
+      ...styles.catRow,
+      ...(activeCategory === c.id ? styles.catRowActive : {})
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: 2,
+      background: c.color,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      textAlign: "left",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, c.name), /*#__PURE__*/React.createElement("span", {
+    style: styles.countPill
+  }, taskCounts[c.id] || 0), /*#__PURE__*/React.createElement("span", {
+    onClick: e => {
+      e.stopPropagation();
+      setEditingCategory(c.id);
+    },
+    style: styles.rowDelete,
+    title: "Editar categoría"
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "✎")), confirmingCatDelete === c.id ? /*#__PURE__*/React.createElement("span", {
+    onClick: e => {
+      e.stopPropagation();
+      deleteCategory(c.id);
+    },
+    style: styles.confirmChip
+  }, "confirmar") : /*#__PURE__*/React.createElement("span", {
+    onClick: e => {
+      e.stopPropagation();
+      setConfirmingCatDelete(c.id);
+      setTimeout(() => setConfirmingCatDelete(v => v === c.id ? null : v), 2500);
+    },
+    style: styles.rowDelete,
+    title: "Eliminar categoría"
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "🗑")))), showCatForm ? /*#__PURE__*/React.createElement(NewCategoryForm, {
+    onCancel: () => setShowCatForm(false),
+    onSave: (name, color) => {
+      addCategory(name, color);
+      setShowCatForm(false);
+    }
+  }) : /*#__PURE__*/React.createElement("button", {
+    style: styles.addCatBtn,
+    onClick: () => setShowCatForm(true)
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, "+"), " Nueva categoría")), /*#__PURE__*/React.createElement("main", {
+    style: styles.main
+  }, /*#__PURE__*/React.createElement("header", {
+    style: styles.header
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+    style: styles.title
+  }, view === "hoy" ? "Hoy" : view === "proximos" ? "Próximos" : view === "categoria" ? "Por categoría" : view === "kpi" ? "Panel KPI" : "Todo"), /*#__PURE__*/React.createElement("p", {
+    style: styles.subtitle
+  }, fmtLong(today))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, gcalToken ? /*#__PURE__*/React.createElement("span", {
+    style: styles.gcalConnected
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, "✓"), " Calendar conectado") : /*#__PURE__*/React.createElement("button", {
+    style: styles.gcalConnectBtn,
+    onClick: connectGcal,
+    disabled: gcalConnecting
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, gcalConnecting ? "⟳" : "🗓"), " ", gcalConnecting ? "Conectando…" : "Conectar Google Calendar"), view !== "kpi" && /*#__PURE__*/React.createElement("button", {
+    style: styles.newBtn,
+    onClick: () => setShowForm(v => !v)
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 15
+  }, "+"), " Nueva tarea"))), gcalError && /*#__PURE__*/React.createElement("div", {
+    style: styles.gcalErrorBanner
+  }, gcalError), showForm && view !== "kpi" && /*#__PURE__*/React.createElement(NewTaskForm, {
+    categories: categories,
+    gcalConnected: !!gcalToken,
+    onCancel: () => setShowForm(false),
+    onSave: (data, sync) => {
+      addTask(data, sync);
+      setShowForm(false);
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "pld-scroll",
+    style: styles.list
+  }, view === "kpi" ? /*#__PURE__*/React.createElement(KpiPanel, {
+    data: kpiData,
+    scope: kpiScope,
+    setScope: setKpiScope
+  }) : /*#__PURE__*/React.createElement(React.Fragment, null, (view === "categoria" ? categoryGroups.length === 0 : groups.length === 0) && /*#__PURE__*/React.createElement("div", {
+    style: styles.empty
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 26,
+    style: {
+      opacity: 0.4,
+      marginBottom: 10
+    }
+  }, "🗓"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0,
+      fontWeight: 500,
+      color: "#2C1B45"
+    }
+  }, view === "hoy" ? "Nada pendiente para hoy" : "No hay tareas acá"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "4px 0 0",
+      fontSize: 13,
+      color: "#8A8A93"
+    }
+  }, "Sumá una tarea para empezar a ordenar el flujo.")), view !== "categoria" && groups.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.date,
+    style: {
+      marginBottom: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.groupLabel
+  }, g.label), g.rows.map(it => /*#__PURE__*/React.createElement(TaskRow, {
+    key: it.key,
+    it: it,
+    cat: catById[it.task.categoryId],
+    expanded: expanded,
+    setExpanded: setExpanded,
+    setStatus: setStatus,
+    toggleSubtask: toggleSubtask,
+    toggleCTA: toggleCTA,
+    deleteTask: deleteTask,
+    retrySync: retrySync,
+    unsyncFromCalendar: unsyncFromCalendar,
+    gcalConnected: !!gcalToken,
+    confirmingDelete: confirmingDelete,
+    setConfirmingDelete: setConfirmingDelete,
+    showDate: false,
+    today: today
+  })))), view === "categoria" && categoryGroups.map(cg => /*#__PURE__*/React.createElement("div", {
+    key: cg.category.id,
+    style: {
+      marginBottom: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...styles.groupLabel,
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: 2,
+      background: cg.category.color
+    }
+  }), cg.category.name), cg.rows.map(it => /*#__PURE__*/React.createElement(TaskRow, {
+    key: it.key,
+    it: it,
+    cat: cg.category,
+    expanded: expanded,
+    setExpanded: setExpanded,
+    setStatus: setStatus,
+    toggleSubtask: toggleSubtask,
+    toggleCTA: toggleCTA,
+    deleteTask: deleteTask,
+    retrySync: retrySync,
+    unsyncFromCalendar: unsyncFromCalendar,
+    gcalConnected: !!gcalToken,
+    confirmingDelete: confirmingDelete,
+    setConfirmingDelete: setConfirmingDelete,
+    showDate: true,
+    today: today
+  }))))))));
+}
+function TaskRow({
+  it,
+  cat,
+  expanded,
+  setExpanded,
+  setStatus,
+  toggleSubtask,
+  toggleCTA,
+  deleteTask,
+  retrySync,
+  unsyncFromCalendar,
+  gcalConnected,
+  confirmingDelete,
+  setConfirmingDelete,
+  showDate,
+  today
+}) {
+  const recLabel = RECURRENCE_LABEL(it.task.recurrence);
+  const done = it.status === "done",
+    cancelled = it.status === "cancelled";
+  const subtasks = it.task.subtasks || [];
+  const subDone = subtasks.filter(s => s.done).length;
+  const allSubDone = subtasks.length > 0 ? subDone === subtasks.length : true;
+  const isOpen = !!expanded[it.key];
+  const hasExtras = subtasks.length > 0 || it.task.cta;
+  const urg = URGENCY[it.task.urgency];
+  const promisedLate = it.task.promisedDate && it.task.promisedDate < today && !done;
+  return /*#__PURE__*/React.createElement("div", {
+    style: styles.rowWrap
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "pld-row",
+    style: {
+      ...styles.row,
+      borderLeftColor: cat ? cat.color : "#E3E1E6"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setStatus(it.key, "done"),
+    title: done ? "Marcar como pendiente" : "Marcar como hecha",
+    style: {
+      ...styles.checkBtn,
+      ...(done ? styles.checkBtnDone : {})
+    }
+  }, done ? /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "✓") : /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "○")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    },
+    onClick: () => hasExtras && setExpanded(e => ({
+      ...e,
+      [it.key]: !e[it.key]
+    }))
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 500,
+      color: done || cancelled ? "#B3AFC0" : "#2C1B45",
+      textDecoration: done || cancelled ? "line-through" : "none",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      cursor: hasExtras ? "pointer" : "default",
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, hasExtras && /*#__PURE__*/React.createElement(Ic, {
+    size: 12,
+    style: {
+      opacity: 0.5
+    }
+  }, isOpen ? "▾" : "▸"), urg && /*#__PURE__*/React.createElement("span", {
+    title: `Urgencia ${urg.label}`,
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: "50%",
+      background: urg.color,
+      flexShrink: 0
+    }
+  }), it.task.title), /*#__PURE__*/React.createElement("div", {
+    style: styles.metaRow
+  }, cat && !showDate && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: cat.color,
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, cat.name), showDate && /*#__PURE__*/React.createElement("span", null, dateLabel(it.date, today)), urg && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: urg.color,
+      fontWeight: 500
+    }
+  }, urg.label), recLabel && /*#__PURE__*/React.createElement("span", {
+    style: styles.recBadge
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 11
+  }, "↻"), " ", recLabel), subtasks.length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: styles.subPill
+  }, subDone, "/", subtasks.length, " subtareas"), it.task.promisedDate && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 3,
+      color: promisedLate ? "#C1442D" : "#8A8A93",
+      fontWeight: promisedLate ? 500 : 400
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 11
+  }, promisedLate ? "⚠" : "🕐"), " prometida ", fmtShort(it.task.promisedDate)), cancelled && /*#__PURE__*/React.createElement("span", {
+    style: styles.cancelledTag
+  }, "cancelada"), /*#__PURE__*/React.createElement(GcalBadge, {
+    task: it.task,
+    gcalConnected: gcalConnected,
+    onSync: () => retrySync(it.task),
+    onUnsync: () => unsyncFromCalendar(it.task)
+  }))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setStatus(it.key, "cancelled"),
+    title: cancelled ? "Reabrir esta instancia" : "Cancelar solo esta instancia",
+    style: {
+      ...styles.iconBtn,
+      ...(cancelled ? styles.iconBtnCancelled : {})
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "✕")), confirmingDelete === it.task.id ? /*#__PURE__*/React.createElement("button", {
+    onClick: () => deleteTask(it.task),
+    style: styles.confirmDeleteBtn
+  }, "confirmar") : /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setConfirmingDelete(it.task.id);
+      setTimeout(() => setConfirmingDelete(v => v === it.task.id ? null : v), 2500);
+    },
+    title: "Eliminar tarea (todas las instancias)",
+    style: styles.iconBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "🗑"))), isOpen && hasExtras && /*#__PURE__*/React.createElement("div", {
+    style: styles.expandPanel
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#8A8A93",
+      marginBottom: 6
+    }
+  }, "Creada el ", fmtDateTime(it.task.createdAt)), subtasks.map(s => {
+    const subLate = s.dueDate && s.dueDate < today && !s.done;
+    return /*#__PURE__*/React.createElement("div", {
+      key: s.id,
+      style: styles.subRow
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => toggleSubtask(it.task.id, s.id),
+      style: {
+        ...styles.subCheck,
+        ...(s.done ? styles.subCheckDone : {})
+      }
+    }, s.done ? /*#__PURE__*/React.createElement(Ic, {
+      size: 9
+    }, "✓") : null), /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: 1,
+        fontSize: 13,
+        color: s.done ? "#B3AFC0" : "#3A2E4E",
+        textDecoration: s.done ? "line-through" : "none"
+      }
+    }, s.title), s.dueDate && /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 3,
+        fontSize: 11,
+        color: subLate ? "#C1442D" : "#8A8A93",
+        fontWeight: subLate ? 500 : 400,
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 10
+    }, subLate ? "⚠" : "🕐"), " ", fmtShort(s.dueDate)), s.driveUrl && /*#__PURE__*/React.createElement("a", {
+      href: s.driveUrl,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      style: styles.driveLink,
+      title: "Abrir en Google Drive"
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 11
+    }, "🔗"), " Drive ", /*#__PURE__*/React.createElement(Ic, {
+      size: 10
+    }, "↗")));
+  }), it.task.cta && /*#__PURE__*/React.createElement("button", {
+    onClick: () => toggleCTA(it.task.id),
+    style: {
+      ...styles.ctaBtn,
+      ...(it.task.cta.done ? styles.ctaBtnDone : allSubDone ? styles.ctaBtnReady : {})
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, "📞"), " ", it.task.cta.done ? `${it.task.cta.label} · hecho` : it.task.cta.label)));
+}
+function KpiPanel({
+  data,
+  scope,
+  setScope
+}) {
+  const totals = data.reduce((acc, d) => {
+    acc.total += d.total;
+    acc.done += d.done;
+    acc.pending += d.pending;
+    acc.cancelled += d.cancelled;
+    acc.overdue += d.overdue;
+    return acc;
+  }, {
+    total: 0,
+    done: 0,
+    pending: 0,
+    cancelled: 0,
+    overdue: 0
+  });
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: styles.kpiScopeRow
+  }, [["todo", "Todo el historial"], ["mes", "Este mes"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setScope(key),
+    style: {
+      ...styles.kpiScopeBtn,
+      ...(scope === key ? styles.kpiScopeBtnActive : {})
+    }
+  }, label))), data.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: styles.empty
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 26,
+    style: {
+      opacity: 0.4,
+      marginBottom: 10
+    }
+  }, "📊"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0,
+      fontWeight: 500,
+      color: "#2C1B45"
+    }
+  }, "Todavía no hay datos para este período")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: styles.kpiSummaryRow
+  }, /*#__PURE__*/React.createElement(KpiStat, {
+    label: "Total",
+    value: totals.total,
+    color: "#2C1B45"
+  }), /*#__PURE__*/React.createElement(KpiStat, {
+    label: "Cumplidas",
+    value: totals.done,
+    color: "#5A7A55"
+  }), /*#__PURE__*/React.createElement(KpiStat, {
+    label: "Pendientes",
+    value: totals.pending,
+    color: "#C98A2A"
+  }), /*#__PURE__*/React.createElement(KpiStat, {
+    label: "Vencidas",
+    value: totals.overdue,
+    color: "#C1442D"
+  }), /*#__PURE__*/React.createElement(KpiStat, {
+    label: "Canceladas",
+    value: totals.cancelled,
+    color: "#8A8A93"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, data.map(d => {
+    const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: d.category.id,
+      style: styles.kpiCatCard
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 9,
+        height: 9,
+        borderRadius: 2,
+        background: d.category.color,
+        flexShrink: 0
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        fontSize: 14,
+        flex: 1
+      }
+    }, d.category.name), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: "#8A8A93"
+      }
+    }, pct, "% cumplido")), /*#__PURE__*/React.createElement("div", {
+      style: styles.kpiBarTrack
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        ...styles.kpiBarFill,
+        width: `${pct}%`
+      }
+    })), /*#__PURE__*/React.createElement("div", {
+      style: styles.kpiCatStats
+    }, /*#__PURE__*/React.createElement("span", null, d.total, " en total"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#5A7A55"
+      }
+    }, d.done, " cumplidas"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#C98A2A"
+      }
+    }, d.pending, " pendientes"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#C1442D"
+      }
+    }, d.overdue, " vencidas"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#8A8A93"
+      }
+    }, d.cancelled, " canceladas")));
+  }))));
+}
+function KpiStat({
+  label,
+  value,
+  color
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: styles.kpiStat
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 600,
+      color,
+      fontFamily: "'Space Grotesk', sans-serif"
+    }
+  }, value), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#8A8A93",
+      textTransform: "uppercase",
+      letterSpacing: "0.04em"
+    }
+  }, label));
+}
+function GcalBadge({
+  task,
+  gcalConnected,
+  onSync,
+  onUnsync
+}) {
+  const g = task.gcal || {
+    status: "idle"
+  };
+  if (g.status === "syncing") return /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 3,
+      color: "#8A8A93",
+      fontWeight: 500
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 11,
+    spin: true
+  }, "⟳"), " sincronizando");
+  if (g.status === "synced") {
+    return /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 3,
+        color: "#5A7A55",
+        fontWeight: 500
+      }
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 11
+    }, "✓"), " en calendar"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#B0503A",
+        fontWeight: 500,
+        cursor: "pointer",
+        textDecoration: "underline"
+      },
+      onClick: e => {
+        e.stopPropagation();
+        onUnsync();
+      },
+      title: "Quitar de Google Calendar"
+    }, "quitar"));
+  }
+  if (g.status === "error") {
+    return /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 3,
+        color: "#C1442D",
+        fontWeight: 500,
+        cursor: "pointer"
+      },
+      onClick: e => {
+        e.stopPropagation();
+        onSync();
+      }
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 11
+    }, "⚠"), " reintentar sync");
+  }
+  if (gcalConnected) {
+    return /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 3,
+        color: "#33566B",
+        fontWeight: 500,
+        cursor: "pointer"
+      },
+      onClick: e => {
+        e.stopPropagation();
+        onSync();
+      },
+      title: "Todavía no está en tu Google Calendar"
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 11
+    }, "🗓"), " sincronizar con calendar");
+  }
+  return null;
+}
+function NewCategoryForm({
+  onSave,
+  onCancel,
+  initialName = "",
+  initialColor = CATEGORY_COLORS[0].hex,
+  saveLabel = "Crear"
+}) {
+  const [name, setName] = useState(initialName);
+  const [color, setColor] = useState(initialColor);
+  return /*#__PURE__*/React.createElement("div", {
+    style: styles.catForm
+  }, /*#__PURE__*/React.createElement("input", {
+    autoFocus: true,
+    placeholder: "Nombre",
+    value: name,
+    onChange: e => setName(e.target.value),
+    style: styles.catInput
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      margin: "8px 0",
+      flexWrap: "wrap"
+    }
+  }, CATEGORY_COLORS.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c.hex,
+    title: c.name,
+    onClick: () => setColor(c.hex),
+    style: {
+      width: 16,
+      height: 16,
+      borderRadius: 4,
+      background: c.hex,
+      border: color === c.hex ? "2px solid #2C1B45" : "1px solid transparent",
+      cursor: "pointer",
+      padding: 0
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: styles.formSaveSmall,
+    onClick: () => {
+      if (name.trim()) onSave(name.trim(), color);
+    }
+  }, saveLabel), /*#__PURE__*/React.createElement("button", {
+    style: styles.formCancelSmall,
+    onClick: onCancel
+  }, "Cancelar")));
+}
+function NewTaskForm({
+  categories,
+  gcalConnected,
+  onCancel,
+  onSave
+}) {
+  const [title, setTitle] = useState("");
+  const [categoryId, setCategoryId] = useState(categories[0]?.id || "");
+  const [startDate, setStartDate] = useState(todayISO());
+  const [recType, setRecType] = useState("none");
+  const [interval, setIntervalV] = useState(1);
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState("");
+  const [subtasks, setSubtasks] = useState([]);
+  const [useCTA, setUseCTA] = useState(false);
+  const [ctaLabel, setCtaLabel] = useState("Contactar cliente");
+  const [urgency, setUrgency] = useState("media");
+  const [promisedDate, setPromisedDate] = useState("");
+  const [syncCalendar, setSyncCalendar] = useState(false);
+  useEffect(() => {
+    if (!categoryId && categories.length) setCategoryId(categories[0].id);
+  }, [categories]); // eslint-disable-line
+
+  const addSubtaskRow = () => setSubtasks(s => [...s, {
+    id: uid("s"),
+    title: "",
+    driveUrl: "",
+    dueDate: ""
+  }]);
+  const updateSubtask = (id, patch) => setSubtasks(s => s.map(x => x.id === id ? {
+    ...x,
+    ...patch
+  } : x));
+  const removeSubtask = id => setSubtasks(s => s.filter(x => x.id !== id));
+  const handleSave = () => {
+    if (!title.trim()) {
+      setError("Poné un título para la tarea.");
+      return;
+    }
+    if (!categoryId) {
+      setError("Elegí una categoría, o creá una nueva desde la barra lateral.");
+      return;
+    }
+    const cleanSubtasks = subtasks.filter(s => s.title.trim()).map(s => ({
+      id: s.id,
+      title: s.title.trim(),
+      driveUrl: s.driveUrl.trim(),
+      dueDate: s.dueDate || null,
+      done: false
+    }));
+    onSave({
+      title: title.trim(),
+      notes: notes.trim(),
+      categoryId,
+      startDate,
+      recurrence: recType === "none" ? {
+        type: "none"
+      } : {
+        type: recType,
+        interval: Math.max(1, Number(interval) || 1)
+      },
+      subtasks: cleanSubtasks,
+      cta: useCTA ? {
+        label: ctaLabel.trim() || "Contactar cliente",
+        done: false
+      } : null,
+      urgency,
+      promisedDate: promisedDate || null
+    }, syncCalendar);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: styles.formPanel
+  }, /*#__PURE__*/React.createElement("input", {
+    autoFocus: true,
+    placeholder: "Título de la tarea",
+    value: title,
+    onChange: e => {
+      setTitle(e.target.value);
+      if (error) setError("");
+    },
+    style: styles.formTitleInput
+  }), /*#__PURE__*/React.createElement("div", {
+    style: styles.formGrid
+  }, /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Categoría"), categories.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: styles.noCategoryHint
+  }, "Todavía no creaste ninguna. Usá \"+ Nueva categoría\" en la barra lateral.") : /*#__PURE__*/React.createElement("select", {
+    value: categoryId,
+    onChange: e => setCategoryId(e.target.value),
+    style: styles.formSelect
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "",
+    disabled: true
+  }, "Elegí una categoría"), categories.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.name)))), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Fecha"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: startDate,
+    onChange: e => setStartDate(e.target.value),
+    style: styles.formSelect
+  })), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Repetición"), /*#__PURE__*/React.createElement("select", {
+    value: recType,
+    onChange: e => setRecType(e.target.value),
+    style: styles.formSelect
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "none"
+  }, "Ninguna"), /*#__PURE__*/React.createElement("option", {
+    value: "daily"
+  }, "Diaria"), /*#__PURE__*/React.createElement("option", {
+    value: "weekly"
+  }, "Semanal"), /*#__PURE__*/React.createElement("option", {
+    value: "monthly"
+  }, "Mensual"))), recType !== "none" && /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Cada"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: 1,
+    value: interval,
+    onChange: e => setIntervalV(e.target.value),
+    style: styles.formSelect
+  })), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Urgencia"), /*#__PURE__*/React.createElement("select", {
+    value: urgency,
+    onChange: e => setUrgency(e.target.value),
+    style: styles.formSelect
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "alta"
+  }, "Alta"), /*#__PURE__*/React.createElement("option", {
+    value: "media"
+  }, "Media"), /*#__PURE__*/React.createElement("option", {
+    value: "baja"
+  }, "Baja"))), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Fecha prometida"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: promisedDate,
+    onChange: e => setPromisedDate(e.target.value),
+    style: styles.formSelect
+  }))), /*#__PURE__*/React.createElement("textarea", {
+    placeholder: "Notas (opcional)",
+    value: notes,
+    onChange: e => setNotes(e.target.value),
+    style: styles.formTextarea
+  }), /*#__PURE__*/React.createElement("div", {
+    style: styles.subEditor
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.formLabel
+  }, "Subtareas"), subtasks.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.id,
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "ej. Video 1",
+    value: s.title,
+    onChange: e => updateSubtask(s.id, {
+      title: e.target.value
+    }),
+    style: {
+      ...styles.formSelect,
+      flex: 2,
+      minWidth: 100
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: s.dueDate,
+    onChange: e => updateSubtask(s.id, {
+      dueDate: e.target.value
+    }),
+    style: {
+      ...styles.formSelect,
+      flex: 1,
+      minWidth: 100
+    },
+    title: "Fecha de vencimiento"
+  }), /*#__PURE__*/React.createElement("input", {
+    placeholder: "Link de Drive (opcional)",
+    value: s.driveUrl,
+    onChange: e => updateSubtask(s.id, {
+      driveUrl: e.target.value
+    }),
+    style: {
+      ...styles.formSelect,
+      flex: 2,
+      minWidth: 120
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => removeSubtask(s.id),
+    style: styles.iconBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "✕")))), /*#__PURE__*/React.createElement("button", {
+    onClick: addSubtaskRow,
+    style: styles.addSubBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 11
+  }, "+"), " Agregar subtarea")), /*#__PURE__*/React.createElement("label", {
+    style: styles.checkboxRow
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: useCTA,
+    onChange: e => setUseCTA(e.target.checked)
+  }), " Agregar acción final (ej. \"Contactar cliente\")"), useCTA && /*#__PURE__*/React.createElement("input", {
+    value: ctaLabel,
+    onChange: e => setCtaLabel(e.target.value),
+    style: {
+      ...styles.formSelect,
+      marginBottom: 10,
+      width: "100%"
+    }
+  }), gcalConnected ? /*#__PURE__*/React.createElement("label", {
+    style: styles.checkboxRow
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: syncCalendar,
+    onChange: e => setSyncCalendar(e.target.checked)
+  }), " Sincronizar con Google Calendar") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...styles.noCategoryHint,
+      marginBottom: 8
+    }
+  }, "Conectá Google Calendar (botón arriba a la derecha) para poder sincronizar esta tarea."), error && /*#__PURE__*/React.createElement("div", {
+    style: styles.formError
+  }, error), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: styles.formSave,
+    onClick: handleSave
+  }, "Guardar tarea"), /*#__PURE__*/React.createElement("button", {
+    style: styles.formCancel,
+    onClick: onCancel
+  }, "Cancelar")));
+}
+
+// ---------- styles ----------
+const INK = "#2C1B45",
+  PAPER = "#F4F3F0",
+  PAPER_2 = "#ECEBE6",
+  LINE = "#E3E1E6",
+  MUTED = "#8A8A93",
+  ACCENT = "#8B4F82";
+const styles = {
+  loadingWrap: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "60px 0",
+    color: MUTED
+  },
+  app: {
+    display: "flex",
+    background: PAPER,
+    color: INK,
+    minHeight: 640,
+    borderRadius: 14,
+    overflow: "hidden",
+    border: `1px solid ${LINE}`,
+    boxShadow: "0 8px 30px rgba(44,27,69,0.12)",
+    zoom: 1.15
+  },
+  sidebar: {
+    width: 210,
+    flexShrink: 0,
+    background: PAPER_2,
+    borderRight: `1px solid ${LINE}`,
+    padding: "18px 14px",
+    display: "flex",
+    flexDirection: "column"
+  },
+  brand: {
+    fontFamily: "'Space Grotesk', sans-serif",
+    fontWeight: 600,
+    fontSize: 16,
+    display: "flex",
+    alignItems: "center",
+    gap: 8
+  },
+  brandMark: {
+    color: ACCENT,
+    fontSize: 12
+  },
+  offlineTag: {
+    fontSize: 10.5,
+    color: MUTED,
+    marginTop: 4,
+    fontStyle: "italic"
+  },
+  navBtn: {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "7px 10px",
+    marginBottom: 2,
+    fontSize: 13.5,
+    fontWeight: 500,
+    color: "#5C5566",
+    background: "transparent",
+    border: "none",
+    borderRadius: 7,
+    cursor: "pointer"
+  },
+  navBtnActive: {
+    background: "#E7DDE5",
+    color: "#5A2E52"
+  },
+  sideDivider: {
+    height: 1,
+    background: LINE,
+    margin: "16px 0 10px"
+  },
+  sideLabel: {
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    color: MUTED,
+    padding: "0 10px",
+    marginBottom: 4
+  },
+  catRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    padding: "6px 10px",
+    marginBottom: 1,
+    background: "transparent",
+    border: "none",
+    borderRadius: 7,
+    fontSize: 13,
+    color: "#4C475A",
+    cursor: "pointer"
+  },
+  catRowActive: {
+    background: "#E7DDE5"
+  },
+  countPill: {
+    fontSize: 11,
+    color: MUTED
+  },
+  rowDelete: {
+    display: "flex",
+    opacity: 0.35,
+    padding: 2,
+    cursor: "pointer"
+  },
+  confirmChip: {
+    fontSize: 10.5,
+    color: "#B0503A",
+    fontWeight: 500,
+    whiteSpace: "nowrap",
+    cursor: "pointer"
+  },
+  addCatBtn: {
+    marginTop: "auto",
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 12.5,
+    color: MUTED,
+    background: "transparent",
+    border: `1px dashed ${LINE}`,
+    borderRadius: 7,
+    padding: "7px 10px",
+    cursor: "pointer"
+  },
+  catForm: {
+    marginTop: "auto",
+    background: "#fff",
+    border: `1px solid ${LINE}`,
+    borderRadius: 8,
+    padding: 10
+  },
+  catInput: {
+    width: "100%",
+    fontSize: 13,
+    padding: "6px 8px",
+    border: `1px solid ${LINE}`,
+    borderRadius: 6,
+    background: "#fff",
+    outline: "none"
+  },
+  formSaveSmall: {
+    fontSize: 12,
+    background: ACCENT,
+    color: "#fff",
+    border: "none",
+    borderRadius: 6,
+    padding: "5px 10px",
+    cursor: "pointer"
+  },
+  formCancelSmall: {
+    fontSize: 12,
+    background: "transparent",
+    color: MUTED,
+    border: "none",
+    cursor: "pointer"
+  },
+  main: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    minWidth: 0
+  },
+  header: {
+    display: "flex",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    padding: "20px 24px 14px"
+  },
+  title: {
+    fontFamily: "'Space Grotesk', sans-serif",
+    fontSize: 21,
+    fontWeight: 600,
+    margin: 0
+  },
+  subtitle: {
+    margin: "3px 0 0",
+    fontSize: 12.5,
+    color: MUTED
+  },
+  newBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: INK,
+    color: "#F4F3F0",
+    border: "none",
+    borderRadius: 8,
+    padding: "8px 13px",
+    fontSize: 13,
+    fontWeight: 500,
+    cursor: "pointer"
+  },
+  formPanel: {
+    margin: "0 24px 14px",
+    background: "#fff",
+    border: `1px solid ${LINE}`,
+    borderRadius: 10,
+    padding: 14
+  },
+  formTitleInput: {
+    width: "100%",
+    fontSize: 14.5,
+    fontWeight: 500,
+    padding: "8px 4px",
+    border: "none",
+    borderBottom: `1px solid ${LINE}`,
+    outline: "none",
+    marginBottom: 10
+  },
+  formGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+    gap: 10,
+    marginBottom: 10
+  },
+  formField: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4
+  },
+  formLabel: {
+    fontSize: 11,
+    color: MUTED,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    marginBottom: 4
+  },
+  formSelect: {
+    fontSize: 13,
+    padding: "6px 8px",
+    border: `1px solid ${LINE}`,
+    borderRadius: 6,
+    background: PAPER,
+    outline: "none"
+  },
+  noCategoryHint: {
+    fontSize: 12,
+    color: "#B0503A",
+    background: "#FBEFEC",
+    border: "1px dashed #E0B3A6",
+    borderRadius: 6,
+    padding: "6px 8px"
+  },
+  formTextarea: {
+    width: "100%",
+    fontSize: 13,
+    padding: "7px 8px",
+    border: `1px solid ${LINE}`,
+    borderRadius: 6,
+    resize: "vertical",
+    minHeight: 42,
+    outline: "none",
+    marginBottom: 12
+  },
+  subEditor: {
+    border: `1px solid ${LINE}`,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+    background: PAPER
+  },
+  addSubBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    fontSize: 12,
+    color: ACCENT,
+    background: "transparent",
+    border: `1px dashed ${LINE}`,
+    borderRadius: 6,
+    padding: "5px 9px",
+    cursor: "pointer"
+  },
+  checkboxRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    fontSize: 12.5,
+    color: "#4C475A",
+    marginBottom: 8,
+    cursor: "pointer"
+  },
+  formError: {
+    fontSize: 12,
+    color: "#B0503A",
+    marginBottom: 6
+  },
+  formSave: {
+    background: ACCENT,
+    color: "#fff",
+    border: "none",
+    borderRadius: 7,
+    padding: "7px 14px",
+    fontSize: 13,
+    fontWeight: 500,
+    cursor: "pointer"
+  },
+  formCancel: {
+    background: "transparent",
+    color: MUTED,
+    border: "none",
+    fontSize: 13,
+    cursor: "pointer"
+  },
+  list: {
+    flex: 1,
+    overflowY: "auto",
+    padding: "0 24px 24px"
+  },
+  groupLabel: {
+    fontSize: 11.5,
+    fontWeight: 500,
+    color: MUTED,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    margin: "10px 0 6px"
+  },
+  rowWrap: {
+    marginBottom: 3
+  },
+  row: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "9px 10px 9px 12px",
+    borderLeft: "3px solid",
+    borderBottom: `1px solid ${LINE}`,
+    background: "#fff",
+    borderTopRightRadius: 6,
+    borderBottomRightRadius: 6
+  },
+  checkBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: "50%",
+    border: `1.4px solid #D7D3DC`,
+    background: "transparent",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: MUTED,
+    cursor: "pointer",
+    flexShrink: 0
+  },
+  checkBtnDone: {
+    background: ACCENT,
+    borderColor: ACCENT,
+    color: "#fff"
+  },
+  metaRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 11.5,
+    color: MUTED,
+    marginTop: 2,
+    flexWrap: "wrap"
+  },
+  recBadge: {
+    display: "flex",
+    alignItems: "center",
+    gap: 3
+  },
+  subPill: {
+    background: PAPER_2,
+    borderRadius: 4,
+    padding: "1px 6px"
+  },
+  cancelledTag: {
+    color: "#B0503A",
+    fontWeight: 500
+  },
+  iconBtn: {
+    width: 24,
+    height: 24,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "none",
+    background: "transparent",
+    color: "#C6C2CC",
+    borderRadius: 6,
+    cursor: "pointer",
+    flexShrink: 0
+  },
+  iconBtnCancelled: {
+    color: "#B0503A"
+  },
+  confirmDeleteBtn: {
+    fontSize: 11,
+    color: "#fff",
+    background: "#B0503A",
+    border: "none",
+    borderRadius: 6,
+    padding: "4px 8px",
+    cursor: "pointer",
+    flexShrink: 0
+  },
+  empty: {
+    textAlign: "center",
+    padding: "50px 0",
+    color: MUTED
+  },
+  expandPanel: {
+    background: "#FBFAF8",
+    border: `1px solid ${LINE}`,
+    borderTop: "none",
+    borderBottomLeftRadius: 6,
+    borderBottomRightRadius: 6,
+    padding: "8px 14px 10px 40px"
+  },
+  subRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "4px 0",
+    flexWrap: "wrap"
+  },
+  subCheck: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
+    border: "1.4px solid #D7D3DC",
+    background: "#fff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "#fff",
+    cursor: "pointer",
+    flexShrink: 0
+  },
+  subCheckDone: {
+    background: ACCENT,
+    borderColor: ACCENT
+  },
+  driveLink: {
+    display: "flex",
+    alignItems: "center",
+    gap: 3,
+    fontSize: 11.5,
+    color: "#33566B",
+    textDecoration: "none",
+    flexShrink: 0
+  },
+  ctaBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    marginTop: 8,
+    fontSize: 12.5,
+    fontWeight: 500,
+    padding: "6px 12px",
+    borderRadius: 7,
+    border: `1px solid ${LINE}`,
+    background: "#fff",
+    color: "#5C5566",
+    cursor: "pointer"
+  },
+  ctaBtnReady: {
+    background: ACCENT,
+    color: "#fff",
+    border: `1px solid ${ACCENT}`
+  },
+  ctaBtnDone: {
+    background: "#EFEAEE",
+    color: "#8B4F82",
+    border: `1px solid ${LINE}`
+  },
+  kpiScopeRow: {
+    display: "flex",
+    gap: 6,
+    marginBottom: 16
+  },
+  kpiScopeBtn: {
+    fontSize: 12.5,
+    fontWeight: 500,
+    color: "#5C5566",
+    background: "#fff",
+    border: `1px solid ${LINE}`,
+    borderRadius: 7,
+    padding: "6px 12px",
+    cursor: "pointer"
+  },
+  kpiScopeBtnActive: {
+    background: INK,
+    color: "#F4F3F0",
+    borderColor: INK
+  },
+  kpiSummaryRow: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))",
+    gap: 10,
+    marginBottom: 20
+  },
+  kpiStat: {
+    background: "#fff",
+    border: `1px solid ${LINE}`,
+    borderRadius: 10,
+    padding: "12px 10px",
+    textAlign: "center"
+  },
+  kpiCatCard: {
+    background: "#fff",
+    border: `1px solid ${LINE}`,
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 10
+  },
+  kpiBarTrack: {
+    height: 6,
+    borderRadius: 4,
+    background: PAPER_2,
+    overflow: "hidden",
+    marginBottom: 8
+  },
+  kpiBarFill: {
+    height: "100%",
+    background: ACCENT,
+    borderRadius: 4
+  },
+  kpiCatStats: {
+    display: "flex",
+    gap: 14,
+    fontSize: 12,
+    color: "#4C475A",
+    flexWrap: "wrap"
+  },
+  gcalConnectBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "#fff",
+    color: "#33566B",
+    border: `1px solid ${LINE}`,
+    borderRadius: 8,
+    padding: "8px 12px",
+    fontSize: 12.5,
+    fontWeight: 500,
+    cursor: "pointer"
+  },
+  gcalConnected: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "#EAF1E8",
+    color: "#5A7A55",
+    border: "1px solid #CFE0CB",
+    borderRadius: 8,
+    padding: "7px 12px",
+    fontSize: 12.5,
+    fontWeight: 500
+  },
+  gcalErrorBanner: {
+    margin: "0 24px 12px",
+    background: "#FBEFEC",
+    border: "1px solid #E0B3A6",
+    color: "#B0503A",
+    borderRadius: 8,
+    padding: "8px 12px",
+    fontSize: 12.5
+  }
+};
+ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(Plandia, null));
+</script>
+</body>
+</html>
