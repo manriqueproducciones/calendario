@@ -527,9 +527,11 @@ function Plandia() {
     }));
     return catList;
   }, [tasks, overrides, categories, activeCategory, activeClient, today]);
+  const [kpiUntilToday, setKpiUntilToday] = useState(false);
   const kpiData = useMemo(() => {
     const rangeStart = kpiScope === "mes" ? firstDayOfMonthISO(today) : addDaysISO(today, -3650);
-    const rangeEnd = kpiScope === "mes" ? lastDayOfMonthISO(today) : addDaysISO(today, 3650);
+    let rangeEnd = kpiScope === "mes" ? lastDayOfMonthISO(today) : addDaysISO(today, 3650);
+    if (kpiUntilToday && rangeEnd > today) rangeEnd = today;
     const byCat = {};
     categories.forEach(c => {
       byCat[c.id] = {
@@ -538,7 +540,9 @@ function Plandia() {
         pending: 0,
         cancelled: 0,
         overdue: 0,
-        total: 0
+        total: 0,
+        taskIds: new Set(),
+        rescheduledIds: new Set()
       };
     });
     tasks.forEach(task => {
@@ -548,14 +552,21 @@ function Plandia() {
         const key = `${task.id}__${date}`;
         const status = overrides[key] || "pending";
         stat.total++;
+        stat.taskIds.add(task.id);
+        if (task.wasRescheduled) stat.rescheduledIds.add(task.id);
         if (status === "done") stat.done++;else if (status === "cancelled") stat.cancelled++;else {
           stat.pending++;
           if (date < today) stat.overdue++;
         }
       });
     });
-    return Object.values(byCat).filter(s => s.total > 0);
-  }, [tasks, overrides, categories, kpiScope, today]);
+    return Object.values(byCat).filter(s => s.total > 0).map(s => ({
+      ...s,
+      taskCount: s.taskIds.size,
+      rescheduledCount: s.rescheduledIds.size,
+      rescheduledPct: s.taskIds.size > 0 ? Math.round(s.rescheduledIds.size / s.taskIds.size * 100) : 0
+    }));
+  }, [tasks, overrides, categories, kpiScope, kpiUntilToday, today]);
   const patchTask = (id, patch) => setTasks(ts => ts.map(t => t.id === id ? {
     ...t,
     ...(typeof patch === "function" ? patch(t) : patch)
@@ -660,9 +671,11 @@ function Plandia() {
   const editTask = async (taskId, data, syncCalendar) => {
     const existing = tasks.find(t => t.id === taskId);
     if (!existing) return;
+    const dateChanged = data.startDate && data.startDate !== existing.startDate;
     const merged = {
       ...existing,
-      ...data
+      ...data,
+      wasRescheduled: existing.wasRescheduled || dateChanged
     };
     setTasks(ts => ts.map(t => t.id === taskId ? merged : t));
     if (!syncCalendar || !gcalToken) return;
@@ -1125,7 +1138,9 @@ function Plandia() {
   }, view === "kpi" ? /*#__PURE__*/React.createElement(KpiPanel, {
     data: kpiData,
     scope: kpiScope,
-    setScope: setKpiScope
+    setScope: setKpiScope,
+    untilToday: kpiUntilToday,
+    setUntilToday: setKpiUntilToday
   }) : /*#__PURE__*/React.createElement(React.Fragment, null, (view === "categoria" ? categoryGroups.length === 0 : groups.length === 0) && /*#__PURE__*/React.createElement("div", {
     style: styles.empty
   }, /*#__PURE__*/React.createElement(Ic, {
@@ -1452,7 +1467,9 @@ function TaskRow({
 function KpiPanel({
   data,
   scope,
-  setScope
+  setScope,
+  untilToday,
+  setUntilToday
 }) {
   const totals = data.reduce((acc, d) => {
     acc.total += d.total;
@@ -1460,14 +1477,19 @@ function KpiPanel({
     acc.pending += d.pending;
     acc.cancelled += d.cancelled;
     acc.overdue += d.overdue;
+    acc.taskCount += d.taskCount;
+    acc.rescheduledCount += d.rescheduledCount;
     return acc;
   }, {
     total: 0,
     done: 0,
     pending: 0,
     cancelled: 0,
-    overdue: 0
+    overdue: 0,
+    taskCount: 0,
+    rescheduledCount: 0
   });
+  const totalRescheduledPct = totals.taskCount > 0 ? Math.round(totals.rescheduledCount / totals.taskCount * 100) : 0;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: styles.kpiScopeRow
   }, [["todo", "Todo el historial"], ["mes", "Este mes"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
@@ -1477,7 +1499,14 @@ function KpiPanel({
       ...styles.kpiScopeBtn,
       ...(scope === key ? styles.kpiScopeBtnActive : {})
     }
-  }, label))), data.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, label)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setUntilToday(v => !v),
+    style: {
+      ...styles.kpiScopeBtn,
+      ...(untilToday ? styles.kpiScopeBtnActive : {})
+    },
+    title: "No contar ocurrencias futuras que todavía no llegaron"
+  }, "Hasta hoy inclusive")), data.length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: styles.empty
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 26,
@@ -1514,6 +1543,10 @@ function KpiPanel({
     value: totals.cancelled,
     color: "#8A8A93"
   })), /*#__PURE__*/React.createElement("div", {
+    style: styles.kpiRescheduleLine
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 12
+  }, "↻"), " ", totalRescheduledPct, "% de las tareas fueron modificadas (cambio de fecha) — ", totals.rescheduledCount, "/", totals.taskCount, " tareas. No afecta el % de cumplimiento."), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 6
     }
@@ -1573,7 +1606,11 @@ function KpiPanel({
       style: {
         color: "#8A8A93"
       }
-    }, d.cancelled, " canceladas")));
+    }, d.cancelled, " canceladas")), d.rescheduledCount > 0 && /*#__PURE__*/React.createElement("div", {
+      style: styles.kpiCatReschedule
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 11
+    }, "↻"), " ", d.rescheduledPct, "% modificadas (", d.rescheduledCount, "/", d.taskCount, " tareas)"));
   }))));
 }
 function KpiStat({
@@ -2616,6 +2653,27 @@ const styles = {
     marginBottom: 10,
     textTransform: "uppercase",
     letterSpacing: "0.04em"
+  },
+  kpiRescheduleLine: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 12,
+    color: "#8A8A93",
+    background: PAPER_2,
+    borderRadius: 8,
+    padding: "8px 12px",
+    marginBottom: 16
+  },
+  kpiCatReschedule: {
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    fontSize: 11.5,
+    color: "#8A8A93",
+    marginTop: 8,
+    paddingTop: 8,
+    borderTop: `1px dashed ${LINE}`
   },
   loginWrap: {
     display: "flex",
