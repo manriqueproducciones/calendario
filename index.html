@@ -403,26 +403,45 @@ function Plandia() {
     });
     return unsub;
   }, [user]);
+  const pendingSave = useRef(null);
+  const doSave = () => {
+    if (!user || !pendingSave.current) return;
+    const payload = pendingSave.current;
+    pendingSave.current = null;
+    fbDb.collection("bitacora").doc(user.uid).set({
+      ...payload,
+      updatedAt: Date.now()
+    }, {
+      merge: true
+    }).catch(e => console.error("No se pudo guardar en Firestore", e));
+  };
   useEffect(() => {
     if (!loaded || !user) return;
+    pendingSave.current = {
+      categories,
+      clients,
+      tasks,
+      overrides
+    };
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      try {
-        await fbDb.collection("bitacora").doc(user.uid).set({
-          categories,
-          clients,
-          tasks,
-          overrides,
-          updatedAt: Date.now()
-        }, {
-          merge: true
-        });
-      } catch (e) {
-        console.error("No se pudo guardar en Firestore", e);
-      }
-    }, 400);
+    saveTimer.current = setTimeout(doSave, 150);
     return () => clearTimeout(saveTimer.current);
   }, [categories, clients, tasks, overrides, loaded, user]);
+  useEffect(() => {
+    const flush = () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      doSave();
+    };
+    window.addEventListener("beforeunload", flush);
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flush();
+    });
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [user]);
   const catById = useMemo(() => {
     const m = {};
     categories.forEach(c => m[c.id] = c);
