@@ -21,6 +21,18 @@
   .pld-scroll::-webkit-scrollbar-thumb { background: #E3E1E6; border-radius: 8px; }
   .pld-cat-btn:hover { background: #F7F6F4; }
   input, select, textarea, button { font-family: 'IBM Plex Sans', sans-serif; }
+
+  @media (max-width: 720px) {
+    body { background: #F4F3F0; }
+    #root { margin: 0; padding: 0; max-width: 100%; }
+    .app-shell { zoom: 1 !important; flex-direction: column !important; border-radius: 0 !important; min-height: 100vh !important; border: none !important; }
+    .app-sidebar { width: 100% !important; box-sizing: border-box; }
+    .app-nav { display: flex !important; gap: 4px; margin-top: 12px !important; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+    .app-nav button { flex-shrink: 0; white-space: nowrap; }
+    .app-header { flex-direction: column !important; align-items: flex-start !important; gap: 10px; padding: 16px 16px 10px !important; }
+    .app-header > div:last-child { width: 100%; flex-wrap: wrap; }
+    .app-main { min-width: 0 !important; }
+  }
 </style>
 </head>
 <body>
@@ -822,14 +834,29 @@ function Plandia() {
       setGcalError("No se pudo quitar el evento del calendario. Probá de nuevo.");
     }
   };
-  const setStatus = (key, newStatus) => setOverrides(ov => {
-    const current = ov[key] || "pending";
-    const next = {
-      ...ov
-    };
-    if (current === newStatus) delete next[key];else next[key] = newStatus;
-    return next;
-  });
+  const setStatus = (key, newStatus) => {
+    setOverrides(ov => {
+      const current = ov[key] || "pending";
+      const next = {
+        ...ov
+      };
+      if (current === newStatus) delete next[key];else next[key] = newStatus;
+      if (user) {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        fbDb.collection("bitacora").doc(user.uid).set({
+          categories,
+          clients,
+          tasks,
+          overrides: next,
+          updatedAt: Date.now()
+        }, {
+          merge: true
+        }).catch(e => console.error("No se pudo guardar en Firestore", e));
+        pendingSave.current = null;
+      }
+      return next;
+    });
+  };
   const toggleSubtask = (taskId, subId) => patchTask(taskId, t => ({
     subtasks: t.subtasks.map(s => s.id === subId ? {
       ...s,
@@ -896,8 +923,10 @@ function Plandia() {
     }, "Cargando bitácora…"));
   }
   return /*#__PURE__*/React.createElement("div", {
+    className: "app-shell",
     style: styles.app
   }, /*#__PURE__*/React.createElement("aside", {
+    className: "app-sidebar",
     style: styles.sidebar
   }, /*#__PURE__*/React.createElement("div", {
     style: styles.brand
@@ -912,6 +941,7 @@ function Plandia() {
     },
     onClick: signOutUser
   }, "salir")), /*#__PURE__*/React.createElement("nav", {
+    className: "app-nav",
     style: {
       marginTop: 16
     }
@@ -1107,8 +1137,10 @@ function Plandia() {
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 13
   }, "+"), " Nuevo cliente")), /*#__PURE__*/React.createElement("main", {
+    className: "app-main",
     style: styles.main
   }, /*#__PURE__*/React.createElement("header", {
+    className: "app-header",
     style: styles.header
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
     style: styles.title
