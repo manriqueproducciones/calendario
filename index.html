@@ -241,6 +241,54 @@ const urgencyRank = u => URGENCY[u] ? URGENCY[u].rank : 3;
 const uid = p => p + "_" + Math.random().toString(36).slice(2, 9);
 const STORAGE_KEY = "bitacora-standalone-v1";
 
+// ---------- Importar tareas desde un panel externo (ej. panel de cliente de la agencia) ----------
+const MESES_ES = {
+  ene: 1,
+  feb: 2,
+  mar: 3,
+  abr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  ago: 8,
+  sep: 9,
+  sept: 9,
+  set: 9,
+  oct: 10,
+  nov: 11,
+  dic: 12
+};
+const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function htmlToFlatText(html) {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/[ \t]+/g, " ").trim();
+}
+function parsePanelText(text, clientNames, yearHint) {
+  const names = clientNames.filter(Boolean).sort((a, b) => b.length - a.length);
+  if (names.length === 0) return [];
+  const nameAlt = names.map(escapeRegExp).join("|");
+  const monthAlt = Object.keys(MESES_ES).sort((a, b) => b.length - a.length).join("|");
+  const re = new RegExp(`(${nameAlt})([\\s\\S]*?)(Reel|Foto|Carrusel|Historia|Video|Post)\\s*(\\d{1,2})\\s*(${monthAlt})\\b`, "g");
+  const marker = text.match(/Todos\d+/g);
+  const body = marker && marker.length ? text.slice(text.lastIndexOf(marker[marker.length - 1]) + marker[marker.length - 1].length) : text;
+  const out = [];
+  let m;
+  while (m = re.exec(body)) {
+    const client = m[1];
+    const title = m[2].replace(/^[·•\-—\s]+/, "").trim();
+    const day = String(m[4]).padStart(2, "0");
+    const month = String(MESES_ES[m[5]]).padStart(2, "0");
+    if (!title) continue;
+    out.push({
+      id: uid("imp"),
+      client,
+      title,
+      dateISO: `${yearHint}-${month}-${day}`,
+      dateLabel: `${m[4]} ${m[5]}`
+    });
+  }
+  return out;
+}
+
 // ---------- Google Calendar (OAuth directo, sin backend) ----------
 const GCAL_CLIENT_ID = "431629068496-eius4r3k5h4il1g1ehclm7jmmg70g6jh.apps.googleusercontent.com";
 const GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.events";
@@ -329,6 +377,7 @@ function Plandia() {
   const [activeCategory, setActiveCategory] = useState(null);
   const [activeClient, setActiveClient] = useState(null);
   const [formState, setFormState] = useState(null);
+  const [showImport, setShowImport] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(null);
   const [confirmingCatDelete, setConfirmingCatDelete] = useState(null);
   const [showCatForm, setShowCatForm] = useState(false);
@@ -660,6 +709,47 @@ function Plandia() {
     } : t));
     if (activeClient === id) setActiveClient(null);
     setConfirmingClientDelete(null);
+  };
+  const confirmImport = async items => {
+    const edicionCat = categories.find(c => c.name.trim().toLowerCase().startsWith("edici"));
+    if (!edicionCat) {
+      setGcalError('No encontré una categoría "Edición". Creala primero desde la barra lateral.');
+      return;
+    }
+    const nameToId = {};
+    clients.forEach(c => {
+      nameToId[c.name] = c.id;
+    });
+    const missing = [...new Set(items.map(i => i.client))].filter(n => !nameToId[n]);
+    const palette = CATEGORY_COLORS;
+    missing.forEach((name, idx) => {
+      const id = uid("cl");
+      nameToId[name] = id;
+      setClients(cs => [...cs, {
+        id,
+        name,
+        color: palette[(cs.length + idx) % palette.length].hex
+      }]);
+    });
+    for (const it of items) {
+      const existing = tasks.find(t => t.clientId === nameToId[it.client] && t.title.trim().toLowerCase() === it.title.trim().toLowerCase() && t.startDate === it.dateISO);
+      if (existing) continue;
+      await addTask({
+        title: it.title,
+        notes: "Importado del panel de Broda",
+        categoryId: edicionCat.id,
+        clientId: nameToId[it.client],
+        startDate: it.dateISO,
+        promisedDate: it.dateISO,
+        recurrence: {
+          type: "none"
+        },
+        subtasks: [],
+        cta: null,
+        urgency: "media"
+      }, false);
+    }
+    setShowImport(false);
   };
   const addTask = async (data, syncCalendar) => {
     const id = uid("t");
@@ -1163,6 +1253,11 @@ function Plandia() {
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 13
   }, gcalConnecting ? "⟳" : "🗓"), " ", gcalConnecting ? "Conectando…" : "Conectar Google Calendar"), view !== "kpi" && /*#__PURE__*/React.createElement("button", {
+    style: styles.gcalConnectBtn,
+    onClick: () => setShowImport(v => !v)
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, "⇩"), " Importar Broda"), view !== "kpi" && /*#__PURE__*/React.createElement("button", {
     style: styles.newBtn,
     onClick: () => setFormState(f => f ? null : {
       mode: "create",
@@ -1172,7 +1267,12 @@ function Plandia() {
     size: 15
   }, "+"), " Nueva tarea"))), gcalError && /*#__PURE__*/React.createElement("div", {
     style: styles.gcalErrorBanner
-  }, gcalError), formState && view !== "kpi" && /*#__PURE__*/React.createElement(NewTaskForm, {
+  }, gcalError), showImport && view !== "kpi" && /*#__PURE__*/React.createElement(ImportPanel, {
+    onCancel: () => setShowImport(false),
+    onConfirm: confirmImport,
+    existingTasks: tasks,
+    clients: clients
+  }), formState && view !== "kpi" && /*#__PURE__*/React.createElement(NewTaskForm, {
     categories: categories,
     clients: clients,
     gcalConnected: !!gcalToken,
@@ -1777,6 +1877,169 @@ function GcalBadge({
     }, "🗓"), " sincronizar con calendar");
   }
   return null;
+}
+function ImportPanel({
+  onCancel,
+  onConfirm,
+  existingTasks,
+  clients
+}) {
+  const [url, setUrl] = useState("https://panel-cliente-app.vercel.app/editor/c1f3a36816820f9653f9fdea6fce5c33881c4b5e");
+  const [clientNames, setClientNames] = useState("Premier, Tao Power");
+  const [status, setStatus] = useState("idle"); // idle | loading | error | preview
+  const [errorMsg, setErrorMsg] = useState("");
+  const [items, setItems] = useState([]);
+  const [confirming, setConfirming] = useState(false);
+  const clientByName = {};
+  clients.forEach(c => {
+    clientByName[c.name] = c;
+  });
+  const fetchAndParse = async () => {
+    setStatus("loading");
+    setErrorMsg("");
+    try {
+      const proxied = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+      const res = await fetch(proxied);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const flat = htmlToFlatText(html);
+      const names = clientNames.split(",").map(s => s.trim()).filter(Boolean);
+      const year = new Date().getFullYear();
+      const parsed = parsePanelText(flat, names, year);
+      if (parsed.length === 0) {
+        setStatus("error");
+        setErrorMsg("No encontré tareas con ese formato. Puede que el panel haya cambiado de diseño.");
+        return;
+      }
+      const withDupes = parsed.map(p => {
+        const cid = clientByName[p.client] && clientByName[p.client].id;
+        const exists = cid && existingTasks.some(t => t.clientId === cid && t.title.trim().toLowerCase() === p.title.trim().toLowerCase() && t.startDate === p.dateISO);
+        return {
+          ...p,
+          exists,
+          include: !exists
+        };
+      });
+      setItems(withDupes);
+      setStatus("preview");
+    } catch (e) {
+      console.error(e);
+      setStatus("error");
+      setErrorMsg("No pude traer el panel (puede ser el proxy caído o CORS). Probá de nuevo en un rato.");
+    }
+  };
+  const toggle = id => setItems(its => its.map(it => it.id === id ? {
+    ...it,
+    include: !it.include
+  } : it));
+  const includedCount = items.filter(i => i.include).length;
+  const handleConfirm = async () => {
+    setConfirming(true);
+    await onConfirm(items.filter(i => i.include));
+    setConfirming(false);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: styles.formPanel
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.formModeTag
+  }, "Importar del panel de Broda"), /*#__PURE__*/React.createElement("div", {
+    style: styles.formGrid
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      ...styles.formField,
+      gridColumn: "1 / -1"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "URL del panel"), /*#__PURE__*/React.createElement("input", {
+    value: url,
+    onChange: e => setUrl(e.target.value),
+    style: styles.formSelect
+  })), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Clientes en el panel (separados por coma)"), /*#__PURE__*/React.createElement("input", {
+    value: clientNames,
+    onChange: e => setClientNames(e.target.value),
+    style: styles.formSelect
+  }))), status !== "preview" && /*#__PURE__*/React.createElement("button", {
+    style: styles.formSave,
+    onClick: fetchAndParse,
+    disabled: status === "loading"
+  }, status === "loading" ? "Buscando…" : "Buscar tareas"), status === "error" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...styles.formError,
+      marginTop: 8
+    }
+  }, errorMsg), status === "preview" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#8A8A93",
+      margin: "10px 0 6px"
+    }
+  }, "Encontré ", items.length, " — ", includedCount, " se van a crear (las marcadas \"ya existe\" están destildadas para no duplicar)."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxHeight: 260,
+      overflowY: "auto",
+      border: `1px solid ${LINE}`,
+      borderRadius: 8
+    }
+  }, items.map(it => /*#__PURE__*/React.createElement("label", {
+    key: it.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "7px 10px",
+      borderBottom: `1px solid ${LINE}`,
+      fontSize: 12.5,
+      opacity: it.exists ? 0.55 : 1
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: it.include,
+    onChange: () => toggle(it.id)
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      color: ACCENT
+    }
+  }, it.client), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, it.title), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#8A8A93"
+    }
+  }, it.dateLabel), it.exists && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#B0503A",
+      fontSize: 11
+    }
+  }, "ya existe")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: styles.formSave,
+    onClick: handleConfirm,
+    disabled: confirming || includedCount === 0
+  }, confirming ? "Creando…" : `Confirmar (${includedCount})`), /*#__PURE__*/React.createElement("button", {
+    style: styles.formCancelSmall,
+    onClick: () => setStatus("idle")
+  }, "Volver a buscar"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: styles.formCancel,
+    onClick: onCancel
+  }, "Cerrar")));
 }
 function NewCategoryForm({
   onSave,
