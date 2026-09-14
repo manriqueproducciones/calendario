@@ -1897,11 +1897,30 @@ function ImportPanel({
   const fetchAndParse = async () => {
     setStatus("loading");
     setErrorMsg("");
+    const proxies = [u => "https://r.jina.ai/" + u, u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u), u => "https://corsproxy.io/?url=" + encodeURIComponent(u)];
+    let html = null;
+    let lastErr = null;
+    for (const build of proxies) {
+      try {
+        const res = await fetch(build(url));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        html = await res.text();
+        if (html && html.length > 50) {
+          lastErr = null;
+          break;
+        }
+        lastErr = new Error("Respuesta vacía");
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (lastErr) {
+      console.error(lastErr);
+      setStatus("error");
+      setErrorMsg(`No pude traer el panel después de probar varios caminos (${lastErr.message || lastErr}). Probá de nuevo en un rato.`);
+      return;
+    }
     try {
-      const proxied = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
-      const res = await fetch(proxied);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const html = await res.text();
       const flat = htmlToFlatText(html);
       const names = clientNames.split(",").map(s => s.trim()).filter(Boolean);
       const year = new Date().getFullYear();
