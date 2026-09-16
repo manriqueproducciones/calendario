@@ -58,10 +58,14 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const fbAuth = firebase.auth();
 const fbDb = firebase.firestore();
-fbDb.settings({
-  experimentalForceLongPolling: true,
-  merge: true
-});
+try {
+  fbDb.settings({
+    experimentalForceLongPolling: true,
+    merge: true
+  });
+} catch (e) {
+  console.error("No se pudo aplicar settings de Firestore", e);
+}
 
 // ---------- iconos simples (sin dependencias externas) ----------
 const Ic = ({
@@ -451,6 +455,7 @@ function Plandia() {
     fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e => setAuthError(e.message));
   };
   const signOutUser = () => fbAuth.signOut();
+  const isRemoteUpdate = useRef(false);
   useEffect(() => {
     if (!user) {
       setLoaded(false);
@@ -460,6 +465,7 @@ function Plandia() {
     const ref = fbDb.collection("bitacora").doc(user.uid);
     const unsub = ref.onSnapshot(snap => {
       const data = snap.data() || {};
+      isRemoteUpdate.current = true;
       setCategories(data.categories || []);
       setClients(data.clients || []);
       setTasks(data.tasks || []);
@@ -485,6 +491,10 @@ function Plandia() {
   };
   useEffect(() => {
     if (!loaded || !user) return;
+    if (isRemoteUpdate.current) {
+      isRemoteUpdate.current = false;
+      return;
+    }
     pendingSave.current = {
       categories,
       clients,
