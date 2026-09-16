@@ -390,6 +390,8 @@ function Plandia() {
   const [gcalToken, setGcalToken] = useState(null);
   const [gcalConnecting, setGcalConnecting] = useState(false);
   const [gcalError, setGcalError] = useState("");
+  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
+  const [saveErrorMsg, setSaveErrorMsg] = useState("");
   const gcalTokenClient = useRef(null);
   const saveTimer = useRef(null);
   useEffect(() => {
@@ -938,20 +940,34 @@ function Plandia() {
       fieldValue = newStatus;
     }
     setOverrides(next);
-    if (user) {
-      fbDb.collection("bitacora").doc(user.uid).update({
-        [`overrides.${key}`]: fieldValue,
-        updatedAt: Date.now()
-      }).catch(e => {
-        console.error("Update puntual falló, reintento con set completo", e);
-        fbDb.collection("bitacora").doc(user.uid).set({
-          overrides: next,
-          updatedAt: Date.now()
-        }, {
-          merge: true
-        }).catch(e2 => console.error("No se pudo guardar de ninguna forma", e2));
-      });
+    if (!user) {
+      setSaveStatus("error");
+      setSaveErrorMsg("No hay usuario logueado — el cambio no se guardó en ningún lado.");
+      return;
     }
+    setSaveStatus("saving");
+    fbDb.collection("bitacora").doc(user.uid).update({
+      [`overrides.${key}`]: fieldValue,
+      updatedAt: Date.now()
+    }).then(() => {
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+    }).catch(e => {
+      console.error("Update puntual falló, reintento con set completo", e);
+      fbDb.collection("bitacora").doc(user.uid).set({
+        overrides: next,
+        updatedAt: Date.now()
+      }, {
+        merge: true
+      }).then(() => {
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
+      }).catch(e2 => {
+        console.error("No se pudo guardar de ninguna forma", e2);
+        setSaveStatus("error");
+        setSaveErrorMsg(e2 && (e2.message || String(e2)) || "Error desconocido al guardar.");
+      });
+    });
   };
   const toggleSubtask = (taskId, subId) => patchTask(taskId, t => ({
     subtasks: t.subtasks.map(s => s.id === subId ? {
@@ -1248,7 +1264,26 @@ function Plandia() {
       alignItems: "center",
       gap: 10
     }
-  }, gcalToken ? /*#__PURE__*/React.createElement("span", {
+  }, saveStatus === "saving" && /*#__PURE__*/React.createElement("span", {
+    style: styles.saveTag
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 11,
+    spin: true
+  }, "⟳"), " guardando"), saveStatus === "saved" && /*#__PURE__*/React.createElement("span", {
+    style: {
+      ...styles.saveTag,
+      color: "#5A7A55"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 11
+  }, "✓"), " guardado"), saveStatus === "error" && /*#__PURE__*/React.createElement("span", {
+    style: {
+      ...styles.saveTag,
+      color: "#C1442D"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 11
+  }, "⚠"), " error al guardar"), gcalToken ? /*#__PURE__*/React.createElement("span", {
     style: styles.gcalConnected
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 13
@@ -1273,7 +1308,11 @@ function Plandia() {
     size: 15
   }, "+"), " Nueva tarea"))), gcalError && /*#__PURE__*/React.createElement("div", {
     style: styles.gcalErrorBanner
-  }, gcalError), showImport && view !== "kpi" && /*#__PURE__*/React.createElement(ImportPanel, {
+  }, gcalError), saveStatus === "error" && /*#__PURE__*/React.createElement("div", {
+    style: styles.saveErrorBanner
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 14
+  }, "⚠"), " No se pudo guardar en la base: ", /*#__PURE__*/React.createElement("strong", null, saveErrorMsg), " — sacale captura a esto y mandámela."), showImport && view !== "kpi" && /*#__PURE__*/React.createElement(ImportPanel, {
     onCancel: () => setShowImport(false),
     onConfirm: confirmImport,
     existingTasks: tasks,
@@ -2970,6 +3009,25 @@ const styles = {
     borderRadius: 8,
     padding: "8px 12px",
     fontSize: 12.5
+  },
+  saveTag: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 11.5,
+    fontWeight: 500,
+    color: "#8A8A93"
+  },
+  saveErrorBanner: {
+    margin: "0 24px 12px",
+    background: "#C1442D",
+    color: "#fff",
+    borderRadius: 8,
+    padding: "10px 14px",
+    fontSize: 13,
+    display: "flex",
+    alignItems: "center",
+    gap: 8
   },
   clientChip: {
     display: "inline-flex",
