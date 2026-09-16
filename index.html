@@ -378,6 +378,7 @@ function Plandia() {
   const [activeClient, setActiveClient] = useState(null);
   const [formState, setFormState] = useState(null);
   const [showImport, setShowImport] = useState(false);
+  const [showDiag, setShowDiag] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(null);
   const [confirmingCatDelete, setConfirmingCatDelete] = useState(null);
   const [showCatForm, setShowCatForm] = useState(false);
@@ -1300,6 +1301,11 @@ function Plandia() {
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 13
   }, "⇩"), " Importar Broda"), view !== "kpi" && /*#__PURE__*/React.createElement("button", {
+    style: styles.gcalConnectBtn,
+    onClick: () => setShowDiag(v => !v)
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, "🩺"), " Diagnóstico"), view !== "kpi" && /*#__PURE__*/React.createElement("button", {
     style: styles.newBtn,
     onClick: () => setFormState(f => f ? null : {
       mode: "create",
@@ -1318,6 +1324,9 @@ function Plandia() {
     onConfirm: confirmImport,
     existingTasks: tasks,
     clients: clients
+  }), showDiag && view !== "kpi" && /*#__PURE__*/React.createElement(DiagnosticPanel, {
+    onClose: () => setShowDiag(false),
+    user: user
   }), formState && view !== "kpi" && /*#__PURE__*/React.createElement(NewTaskForm, {
     categories: categories,
     clients: clients,
@@ -1923,6 +1932,137 @@ function GcalBadge({
     }, "🗓"), " sincronizar con calendar");
   }
   return null;
+}
+function DiagnosticPanel({
+  onClose,
+  user
+}) {
+  const [steps, setSteps] = useState([{
+    id: "auth",
+    label: "Sesión iniciada",
+    status: "pending"
+  }, {
+    id: "fetch",
+    label: "Llegar a firestore.googleapis.com (red)",
+    status: "pending"
+  }, {
+    id: "read",
+    label: "Leer tu documento en Firestore",
+    status: "pending"
+  }, {
+    id: "write",
+    label: "Escribir un dato de prueba en Firestore",
+    status: "pending"
+  }]);
+  const [running, setRunning] = useState(false);
+  const setStepResult = (id, status, detail) => setSteps(s => s.map(st => st.id === id ? {
+    ...st,
+    status,
+    detail
+  } : st));
+  const withTimeout = (promise, ms) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`sin respuesta en ${ms / 1000}s`)), ms))]);
+  const runDiagnostics = async () => {
+    setRunning(true);
+    setSteps(s => s.map(st => ({
+      ...st,
+      status: "pending",
+      detail: null
+    })));
+    if (user) setStepResult("auth", "ok", user.email);else {
+      setStepResult("auth", "fail", "No hay sesión activa");
+      setRunning(false);
+      return;
+    }
+    const t0 = Date.now();
+    try {
+      await withTimeout(fetch("https://firestore.googleapis.com/", {
+        mode: "no-cors"
+      }), 6000);
+      setStepResult("fetch", "ok", `${Date.now() - t0}ms`);
+    } catch (e) {
+      setStepResult("fetch", "fail", e.message);
+    }
+    const t1 = Date.now();
+    try {
+      await withTimeout(fbDb.collection("bitacora").doc(user.uid).get(), 8000);
+      setStepResult("read", "ok", `${Date.now() - t1}ms`);
+    } catch (e) {
+      setStepResult("read", "fail", e && e.message || String(e));
+    }
+    const t2 = Date.now();
+    try {
+      await withTimeout(fbDb.collection("bitacora").doc(user.uid).update({
+        __diagnostic_ping: Date.now()
+      }), 8000);
+      setStepResult("write", "ok", `${Date.now() - t2}ms`);
+    } catch (e) {
+      setStepResult("write", "fail", e && e.message || String(e));
+    }
+    setRunning(false);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: styles.formPanel
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.formModeTag
+  }, "Diagnóstico de conexión"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: "#8A8A93",
+      margin: "0 0 12px"
+    }
+  }, "Corre 4 pruebas en orden y te muestra dónde exactamente se traba, sin necesidad de abrir la consola."), /*#__PURE__*/React.createElement("button", {
+    style: styles.formSave,
+    onClick: runDiagnostics,
+    disabled: running
+  }, running ? "Corriendo…" : "Correr diagnóstico"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, steps.map(st => /*#__PURE__*/React.createElement("div", {
+    key: st.id,
+    style: styles.diagRow
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 18,
+      flexShrink: 0
+    }
+  }, st.status === "pending" && (running ? /*#__PURE__*/React.createElement(Ic, {
+    size: 13,
+    spin: true
+  }, "⟳") : /*#__PURE__*/React.createElement(Ic, {
+    size: 13,
+    style: {
+      opacity: 0.3
+    }
+  }, "○")), st.status === "ok" && /*#__PURE__*/React.createElement(Ic, {
+    size: 13,
+    style: {
+      color: "#5A7A55"
+    }
+  }, "✓"), st.status === "fail" && /*#__PURE__*/React.createElement(Ic, {
+    size: 13,
+    style: {
+      color: "#C1442D"
+    }
+  }, "✕")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, st.label), st.detail && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: st.status === "fail" ? "#C1442D" : "#8A8A93",
+      fontWeight: st.status === "fail" ? 600 : 400
+    }
+  }, st.detail)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: styles.formCancel,
+    onClick: onClose
+  }, "Cerrar")));
 }
 function ImportPanel({
   onCancel,
@@ -3029,6 +3169,14 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: 8
+  },
+  diagRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "7px 4px",
+    borderBottom: `1px solid ${LINE}`,
+    fontSize: 13
   },
   clientChip: {
     display: "inline-flex",
