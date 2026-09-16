@@ -925,27 +925,33 @@ function Plandia() {
     }
   };
   const setStatus = (key, newStatus) => {
-    setOverrides(ov => {
-      const current = ov[key] || "pending";
-      const next = {
-        ...ov
-      };
-      if (current === newStatus) delete next[key];else next[key] = newStatus;
-      if (user) {
-        if (saveTimer.current) clearTimeout(saveTimer.current);
+    const current = overrides[key] || "pending";
+    const next = {
+      ...overrides
+    };
+    let fieldValue;
+    if (current === newStatus) {
+      delete next[key];
+      fieldValue = firebase.firestore.FieldValue.delete();
+    } else {
+      next[key] = newStatus;
+      fieldValue = newStatus;
+    }
+    setOverrides(next);
+    if (user) {
+      fbDb.collection("bitacora").doc(user.uid).update({
+        [`overrides.${key}`]: fieldValue,
+        updatedAt: Date.now()
+      }).catch(e => {
+        console.error("Update puntual falló, reintento con set completo", e);
         fbDb.collection("bitacora").doc(user.uid).set({
-          categories,
-          clients,
-          tasks,
           overrides: next,
           updatedAt: Date.now()
         }, {
           merge: true
-        }).catch(e => console.error("No se pudo guardar en Firestore", e));
-        pendingSave.current = null;
-      }
-      return next;
-    });
+        }).catch(e2 => console.error("No se pudo guardar de ninguna forma", e2));
+      });
+    }
   };
   const toggleSubtask = (taskId, subId) => patchTask(taskId, t => ({
     subtasks: t.subtasks.map(s => s.id === subId ? {
