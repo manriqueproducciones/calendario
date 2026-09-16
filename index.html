@@ -926,6 +926,7 @@ function Plandia() {
       setGcalError("No se pudo quitar el evento del calendario. Probá de nuevo.");
     }
   };
+  const withTimeout = (promise, ms, label) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${label}: no respondió en ${ms / 1000}s (posible bloqueo de red/extensión, no un error de datos)`)), ms))]);
   const setStatus = (key, newStatus) => {
     const current = overrides[key] || "pending";
     const next = {
@@ -946,20 +947,20 @@ function Plandia() {
       return;
     }
     setSaveStatus("saving");
-    fbDb.collection("bitacora").doc(user.uid).update({
+    withTimeout(fbDb.collection("bitacora").doc(user.uid).update({
       [`overrides.${key}`]: fieldValue,
       updatedAt: Date.now()
-    }).then(() => {
+    }), 8000, "Guardado puntual").then(() => {
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
     }).catch(e => {
       console.error("Update puntual falló, reintento con set completo", e);
-      fbDb.collection("bitacora").doc(user.uid).set({
+      withTimeout(fbDb.collection("bitacora").doc(user.uid).set({
         overrides: next,
         updatedAt: Date.now()
       }, {
         merge: true
-      }).then(() => {
+      }), 8000, "Guardado de respaldo").then(() => {
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus(s => s === "saved" ? "idle" : s), 2000);
       }).catch(e2 => {
