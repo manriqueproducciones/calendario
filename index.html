@@ -58,6 +58,10 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const fbAuth = firebase.auth();
 const fbDb = firebase.firestore();
+fbDb.settings({
+  experimentalForceLongPolling: true,
+  merge: true
+});
 
 // ---------- iconos simples (sin dependencias externas) ----------
 const Ic = ({
