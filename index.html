@@ -10,9 +10,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap');
   * { box-sizing: border-box; }
@@ -1688,6 +1688,87 @@ function TaskRow({
   }, "📞"), " ", it.task.cta.done ? `${it.task.cta.label} · hecho` : it.task.cta.label)));
 }
 const PIE_PALETTE = ["#8B4F82", "#33566B", "#C98A2A", "#5A7A55", "#B0503A", "#6E4C77", "#4F6B52", "#8A8A93", "#B27CA8", "#7A3B45"];
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
+  return m ? {
+    r: parseInt(m[1], 16),
+    g: parseInt(m[2], 16),
+    b: parseInt(m[3], 16)
+  } : {
+    r: 139,
+    g: 79,
+    b: 130
+  };
+}
+function PctBarList({
+  items,
+  total
+}) {
+  if (!items.length) return /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#8A8A93",
+      padding: "10px 0"
+    }
+  }, "Sin datos en este período.");
+  return /*#__PURE__*/React.createElement("div", null, items.map((it, i) => {
+    const pct = total > 0 ? Math.round(it.count / total * 100) : 0;
+    const color = it.color || PIE_PALETTE[i % PIE_PALETTE.length];
+    return /*#__PURE__*/React.createElement("div", {
+      key: it.name + i,
+      style: {
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 12.5,
+        marginBottom: 3
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontWeight: 500,
+        color: "#3A2E4E"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        background: color,
+        flexShrink: 0
+      }
+    }), it.name), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 700,
+        color: "#2C1B45"
+      }
+    }, pct, "% ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        color: "#8A8A93"
+      }
+    }, "(", it.count, ")"))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 7,
+        borderRadius: 4,
+        background: "#ECEBE6",
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: "100%",
+        width: `${pct}%`,
+        background: color,
+        borderRadius: 4
+      }
+    })));
+  }));
+}
 function MetricsPanel({
   categories,
   clients,
@@ -1699,12 +1780,21 @@ function MetricsPanel({
   const [clientFilter, setClientFilter] = useState("");
   const [dateFrom, setDateFrom] = useState(firstDayOfMonthISO(today));
   const [dateTo, setDateTo] = useState(today);
-  const barRef = useRef(null);
-  const barChart = useRef(null);
   const pieCatRef = useRef(null);
   const pieCatChart = useRef(null);
   const pieClientRef = useRef(null);
   const pieClientChart = useRef(null);
+  const [chartsReady, setChartsReady] = useState(typeof Chart !== "undefined");
+  useEffect(() => {
+    if (chartsReady) return;
+    const t = setInterval(() => {
+      if (typeof Chart !== "undefined") {
+        setChartsReady(true);
+        clearInterval(t);
+      }
+    }, 300);
+    return () => clearInterval(t);
+  }, [chartsReady]);
   const rangeStart = dateFrom || "0000-01-01";
   const rangeEnd = dateTo || "9999-12-31";
   const rows = useMemo(() => {
@@ -1751,8 +1841,6 @@ function MetricsPanel({
     cancelled: 0,
     overdue: 0
   });
-
-  // distribución general (ignora los filtros de categoría/cliente, solo respeta fecha)
   const catDist = useMemo(() => {
     const byCat = {};
     categories.forEach(c => {
@@ -1767,9 +1855,10 @@ function MetricsPanel({
       if (!stat) return;
       stat.count += occurrences(task, rangeStart, rangeEnd).length;
     });
-    const total = Object.values(byCat).reduce((s, c) => s + c.count, 0);
+    const items = Object.values(byCat).filter(c => c.count > 0).sort((a, b) => b.count - a.count);
+    const total = items.reduce((s, c) => s + c.count, 0);
     return {
-      items: Object.values(byCat).filter(c => c.count > 0),
+      items,
       total
     };
   }, [categories, tasks, rangeStart, rangeEnd]);
@@ -1788,7 +1877,7 @@ function MetricsPanel({
       if (!n) return;
       if (task.clientId && byClient[task.clientId]) byClient[task.clientId].count += n;else sinCliente += n;
     });
-    const items = Object.values(byClient).filter(c => c.count > 0);
+    const items = Object.values(byClient).filter(c => c.count > 0).sort((a, b) => b.count - a.count);
     if (sinCliente > 0) items.push({
       name: "Sin cliente",
       color: "#C7C4B3",
@@ -1800,68 +1889,12 @@ function MetricsPanel({
       total
     };
   }, [clients, tasks, rangeStart, rangeEnd]);
-  useEffect(() => {
-    if (!barRef.current || typeof Chart === "undefined") return;
-    if (barChart.current) barChart.current.destroy();
-    if (rows.length === 0) return;
-    barChart.current = new Chart(barRef.current, {
-      type: "bar",
-      data: {
-        labels: rows.map(r => r.category.name),
-        datasets: [{
-          label: "Cumplidas",
-          data: rows.map(r => r.done),
-          backgroundColor: "#5A7A55"
-        }, {
-          label: "Pendientes",
-          data: rows.map(r => r.pending - r.overdue),
-          backgroundColor: "#C98A2A"
-        }, {
-          label: "Vencidas",
-          data: rows.map(r => r.overdue),
-          backgroundColor: "#C1442D"
-        }, {
-          label: "Canceladas",
-          data: rows.map(r => r.cancelled),
-          backgroundColor: "#8A8A93"
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: {
-            position: "bottom",
-            labels: {
-              font: {
-                size: 11
-              },
-              boxWidth: 12
-            }
-          }
-        },
-        scales: {
-          x: {
-            stacked: true
-          },
-          y: {
-            stacked: true,
-            beginAtZero: true,
-            ticks: {
-              precision: 0
-            }
-          }
-        }
-      }
-    });
-  }, [rows]);
   const makePie = (ref, instRef, dist) => {
     if (!ref.current || typeof Chart === "undefined") return;
     if (instRef.current) instRef.current.destroy();
     if (dist.items.length === 0) return;
     instRef.current = new Chart(ref.current, {
-      type: "pie",
+      type: "doughnut",
       data: {
         labels: dist.items.map(i => i.name),
         datasets: [{
@@ -1875,17 +1908,11 @@ function MetricsPanel({
         animation: false,
         plugins: {
           legend: {
-            position: "bottom",
-            labels: {
-              font: {
-                size: 10.5
-              },
-              boxWidth: 10
-            }
+            display: false
           },
           tooltip: {
             callbacks: {
-              label: ctx => `${ctx.label}: ${Math.round(ctx.parsed / dist.total * 100)}%`
+              label: ctx => `${ctx.label}: ${Math.round(ctx.parsed / dist.total * 100)}% (${ctx.parsed})`
             }
           }
         }
@@ -1894,10 +1921,10 @@ function MetricsPanel({
   };
   useEffect(() => {
     makePie(pieCatRef, pieCatChart, catDist);
-  }, [catDist]);
+  }, [catDist, chartsReady]);
   useEffect(() => {
     makePie(pieClientRef, pieClientChart, clientDist);
-  }, [clientDist]);
+  }, [clientDist, chartsReady]);
   const exportPDF = () => {
     if (!window.jspdf) {
       alert("La librería de PDF todavía está cargando, esperá un segundo y probá de nuevo.");
@@ -1925,20 +1952,41 @@ function MetricsPanel({
     doc.setTextColor(44, 27, 69);
     doc.setFontSize(12.5);
     doc.text(`Total: ${totals.total}    Cumplidas: ${totals.done}    Pendientes: ${totals.pending}    Vencidas: ${totals.overdue}    Canceladas: ${totals.cancelled}`, 40, y);
-    y += 20;
-    const imgW = (pageW - 80 - 20) / 2;
+    y += 24;
+    const drawDistTable = (title, dist, startY) => {
+      doc.setFontSize(12);
+      doc.setTextColor(44, 27, 69);
+      doc.text(title, 40, startY);
+      let yy = startY + 14;
+      doc.setFontSize(9.5);
+      const barX = 220,
+        barW = 200,
+        barH = 8;
+      dist.items.forEach((it, idx) => {
+        const pct = dist.total > 0 ? Math.round(it.count / dist.total * 100) : 0;
+        const color = it.color || PIE_PALETTE[idx % PIE_PALETTE.length];
+        const rgb = hexToRgb(color);
+        doc.setTextColor(60, 55, 70);
+        doc.text(`${it.name}`, 40, yy + 6);
+        doc.setFillColor(230, 228, 222);
+        doc.rect(barX, yy, barW, barH, "F");
+        doc.setFillColor(rgb.r, rgb.g, rgb.b);
+        doc.rect(barX, yy, barW * pct / 100, barH, "F");
+        doc.setTextColor(44, 27, 69);
+        doc.text(`${pct}% (${it.count})`, barX + barW + 10, yy + 7);
+        yy += barH + 10;
+      });
+      return yy + 10;
+    };
+    y = drawDistTable("% por categoría", catDist, y);
+    y = drawDistTable("% por cliente", clientDist, y + 6);
     try {
-      if (barChart.current) {
-        doc.addImage(barChart.current.toBase64Image(), "PNG", 40, y, pageW - 80, 200);
-        y += 216;
+      if (pieCatChart.current && pieClientChart.current) {
+        const imgW = (pageW - 80 - 20) / 2;
+        doc.addImage(pieCatChart.current.toBase64Image(), "PNG", 40, y, imgW, 150);
+        doc.addImage(pieClientChart.current.toBase64Image(), "PNG", 40 + imgW + 20, y, imgW, 150);
+        y += 166;
       }
-    } catch (e) {
-      console.error(e);
-    }
-    try {
-      if (pieCatChart.current) doc.addImage(pieCatChart.current.toBase64Image(), "PNG", 40, y, imgW, 180);
-      if (pieClientChart.current) doc.addImage(pieClientChart.current.toBase64Image(), "PNG", 40 + imgW + 20, y, imgW, 180);
-      y += 196;
     } catch (e) {
       console.error(e);
     }
@@ -2020,7 +2068,7 @@ function MetricsPanel({
     style: styles.formSave,
     onClick: exportPDF,
     disabled: rows.length === 0
-  }, "⬇ Exportar PDF")), rows.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "⬇ Exportar PDF")), rows.length === 0 && catDist.items.length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: styles.empty
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 26,
@@ -2058,27 +2106,6 @@ function MetricsPanel({
     color: "#8A8A93"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "#fff",
-      border: `1px solid ${LINE}`,
-      borderRadius: 10,
-      padding: 16,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      fontWeight: 600,
-      color: "#4C475A",
-      marginBottom: 8
-    }
-  }, "Estado por categoría"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      height: 220
-    }
-  }, /*#__PURE__*/React.createElement("canvas", {
-    ref: barRef
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
       display: "grid",
       gridTemplateColumns: "1fr 1fr",
       gap: 14,
@@ -2093,18 +2120,22 @@ function MetricsPanel({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 13,
       fontWeight: 600,
-      color: "#4C475A",
-      marginBottom: 8
+      color: "#2C1B45",
+      marginBottom: 10
     }
-  }, "% por categoría"), /*#__PURE__*/React.createElement("div", {
+  }, "% del trabajo por categoría"), chartsReady && catDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
-      height: 200
+      height: 150,
+      marginBottom: 12
     }
   }, /*#__PURE__*/React.createElement("canvas", {
     ref: pieCatRef
-  }))), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement(PctBarList, {
+    items: catDist.items,
+    total: catDist.total
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       background: "#fff",
       border: `1px solid ${LINE}`,
@@ -2113,18 +2144,29 @@ function MetricsPanel({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 13,
       fontWeight: 600,
-      color: "#4C475A",
-      marginBottom: 8
+      color: "#2C1B45",
+      marginBottom: 10
     }
-  }, "% por cliente"), /*#__PURE__*/React.createElement("div", {
+  }, "% del trabajo por cliente"), chartsReady && clientDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
-      height: 200
+      height: 150,
+      marginBottom: 12
     }
   }, /*#__PURE__*/React.createElement("canvas", {
     ref: pieClientRef
-  })))), /*#__PURE__*/React.createElement("div", null, rows.map(d => {
+  })), /*#__PURE__*/React.createElement(PctBarList, {
+    items: clientDist.items,
+    total: clientDist.total
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: "#2C1B45",
+      margin: "4px 0 10px"
+    }
+  }, "Detalle por categoría (según filtros de arriba)"), /*#__PURE__*/React.createElement("div", null, rows.map(d => {
     const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
     return /*#__PURE__*/React.createElement("div", {
       key: d.category.id,
