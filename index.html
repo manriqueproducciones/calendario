@@ -2116,7 +2116,10 @@ function MetricsPanel({
       background: "#fff",
       border: `1px solid ${LINE}`,
       borderRadius: 10,
-      padding: 16
+      padding: 16,
+      display: "flex",
+      flexDirection: "column",
+      maxHeight: 460
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2128,19 +2131,25 @@ function MetricsPanel({
   }, "% del trabajo por categoría"), chartsReady && catDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       height: 150,
-      marginBottom: 12
+      marginBottom: 12,
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement("canvas", {
     ref: pieCatRef
-  })), /*#__PURE__*/React.createElement(PctBarList, {
+  })), /*#__PURE__*/React.createElement("div", {
+    style: { overflowY: "auto", flex: 1 }
+  }, /*#__PURE__*/React.createElement(PctBarList, {
     items: catDist.items,
     total: catDist.total
-  })), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       background: "#fff",
       border: `1px solid ${LINE}`,
       borderRadius: 10,
-      padding: 16
+      padding: 16,
+      display: "flex",
+      flexDirection: "column",
+      maxHeight: 460
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2152,14 +2161,17 @@ function MetricsPanel({
   }, "% del trabajo por cliente"), chartsReady && clientDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       height: 150,
-      marginBottom: 12
+      marginBottom: 12,
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement("canvas", {
     ref: pieClientRef
-  })), /*#__PURE__*/React.createElement(PctBarList, {
+  })), /*#__PURE__*/React.createElement("div", {
+    style: { overflowY: "auto", flex: 1 }
+  }, /*#__PURE__*/React.createElement(PctBarList, {
     items: clientDist.items,
     total: clientDist.total
-  }))), /*#__PURE__*/React.createElement("div", {
+  })))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       fontWeight: 600,
