@@ -12,6 +12,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap');
   * { box-sizing: border-box; }
@@ -1686,6 +1687,7 @@ function TaskRow({
     size: 13
   }, "📞"), " ", it.task.cta.done ? `${it.task.cta.label} · hecho` : it.task.cta.label)));
 }
+const PIE_PALETTE = ["#8B4F82", "#33566B", "#C98A2A", "#5A7A55", "#B0503A", "#6E4C77", "#4F6B52", "#8A8A93", "#B27CA8", "#7A3B45"];
 function MetricsPanel({
   categories,
   clients,
@@ -1697,11 +1699,15 @@ function MetricsPanel({
   const [clientFilter, setClientFilter] = useState("");
   const [dateFrom, setDateFrom] = useState(firstDayOfMonthISO(today));
   const [dateTo, setDateTo] = useState(today);
-  const chartRef = useRef(null);
-  const chartInstance = useRef(null);
+  const barRef = useRef(null);
+  const barChart = useRef(null);
+  const pieCatRef = useRef(null);
+  const pieCatChart = useRef(null);
+  const pieClientRef = useRef(null);
+  const pieClientChart = useRef(null);
+  const rangeStart = dateFrom || "0000-01-01";
+  const rangeEnd = dateTo || "9999-12-31";
   const rows = useMemo(() => {
-    const rangeStart = dateFrom || "0000-01-01";
-    const rangeEnd = dateTo || "9999-12-31";
     const byCat = {};
     categories.forEach(c => {
       if (catFilter && c.id !== catFilter) return;
@@ -1730,7 +1736,7 @@ function MetricsPanel({
       });
     });
     return Object.values(byCat).filter(s => s.total > 0);
-  }, [categories, tasks, overrides, catFilter, clientFilter, dateFrom, dateTo, today]);
+  }, [categories, tasks, overrides, catFilter, clientFilter, rangeStart, rangeEnd, today]);
   const totals = rows.reduce((acc, d) => {
     acc.total += d.total;
     acc.done += d.done;
@@ -1745,11 +1751,60 @@ function MetricsPanel({
     cancelled: 0,
     overdue: 0
   });
+
+  // distribución general (ignora los filtros de categoría/cliente, solo respeta fecha)
+  const catDist = useMemo(() => {
+    const byCat = {};
+    categories.forEach(c => {
+      byCat[c.id] = {
+        name: c.name,
+        color: c.color,
+        count: 0
+      };
+    });
+    tasks.forEach(task => {
+      const stat = byCat[task.categoryId];
+      if (!stat) return;
+      stat.count += occurrences(task, rangeStart, rangeEnd).length;
+    });
+    const total = Object.values(byCat).reduce((s, c) => s + c.count, 0);
+    return {
+      items: Object.values(byCat).filter(c => c.count > 0),
+      total
+    };
+  }, [categories, tasks, rangeStart, rangeEnd]);
+  const clientDist = useMemo(() => {
+    const byClient = {};
+    clients.forEach((c, i) => {
+      byClient[c.id] = {
+        name: c.name,
+        color: c.color || PIE_PALETTE[i % PIE_PALETTE.length],
+        count: 0
+      };
+    });
+    let sinCliente = 0;
+    tasks.forEach(task => {
+      const n = occurrences(task, rangeStart, rangeEnd).length;
+      if (!n) return;
+      if (task.clientId && byClient[task.clientId]) byClient[task.clientId].count += n;else sinCliente += n;
+    });
+    const items = Object.values(byClient).filter(c => c.count > 0);
+    if (sinCliente > 0) items.push({
+      name: "Sin cliente",
+      color: "#C7C4B3",
+      count: sinCliente
+    });
+    const total = items.reduce((s, c) => s + c.count, 0);
+    return {
+      items,
+      total
+    };
+  }, [clients, tasks, rangeStart, rangeEnd]);
   useEffect(() => {
-    if (!chartRef.current || typeof Chart === "undefined") return;
-    if (chartInstance.current) chartInstance.current.destroy();
+    if (!barRef.current || typeof Chart === "undefined") return;
+    if (barChart.current) barChart.current.destroy();
     if (rows.length === 0) return;
-    chartInstance.current = new Chart(chartRef.current, {
+    barChart.current = new Chart(barRef.current, {
       type: "bar",
       data: {
         labels: rows.map(r => r.category.name),
@@ -1773,6 +1828,8 @@ function MetricsPanel({
       },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
         plugins: {
           legend: {
             position: "bottom",
@@ -1798,10 +1855,49 @@ function MetricsPanel({
         }
       }
     });
-    return () => {
-      if (chartInstance.current) chartInstance.current.destroy();
-    };
   }, [rows]);
+  const makePie = (ref, instRef, dist) => {
+    if (!ref.current || typeof Chart === "undefined") return;
+    if (instRef.current) instRef.current.destroy();
+    if (dist.items.length === 0) return;
+    instRef.current = new Chart(ref.current, {
+      type: "pie",
+      data: {
+        labels: dist.items.map(i => i.name),
+        datasets: [{
+          data: dist.items.map(i => i.count),
+          backgroundColor: dist.items.map((i, idx) => i.color || PIE_PALETTE[idx % PIE_PALETTE.length])
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: {
+              font: {
+                size: 10.5
+              },
+              boxWidth: 10
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.label}: ${Math.round(ctx.parsed / dist.total * 100)}%`
+            }
+          }
+        }
+      }
+    });
+  };
+  useEffect(() => {
+    makePie(pieCatRef, pieCatChart, catDist);
+  }, [catDist]);
+  useEffect(() => {
+    makePie(pieClientRef, pieClientChart, clientDist);
+  }, [clientDist]);
   const exportPDF = () => {
     if (!window.jspdf) {
       alert("La librería de PDF todavía está cargando, esperá un segundo y probá de nuevo.");
@@ -1814,37 +1910,64 @@ function MetricsPanel({
       unit: "pt",
       format: "a4"
     });
+    const pageW = doc.internal.pageSize.getWidth();
     const catName = catFilter ? (categories.find(c => c.id === catFilter) || {}).name || "—" : "Todas";
     const clientName = clientFilter ? (clients.find(c => c.id === clientFilter) || {}).name || "—" : "Todos";
-    doc.setFontSize(16);
-    doc.text("Reporte de métricas — Bitácora", 40, 50);
-    doc.setFontSize(10);
-    doc.setTextColor(120);
-    doc.text(`Generado el ${new Date().toLocaleDateString("es-AR")} · Categoría: ${catName} · Cliente: ${clientName} · Período: ${dateFrom || "sin límite"} a ${dateTo || "sin límite"}`, 40, 68);
-    doc.setTextColor(0);
-    doc.setFontSize(12);
-    let y = 100;
-    doc.text(`Total: ${totals.total}   Cumplidas: ${totals.done}   Pendientes: ${totals.pending}   Vencidas: ${totals.overdue}   Canceladas: ${totals.cancelled}`, 40, y);
-    y += 26;
-    if (chartRef.current && rows.length > 0) {
-      try {
-        const img = chartRef.current.toDataURL("image/png", 1.0);
-        doc.addImage(img, "PNG", 40, y, 500, 220);
-        y += 240;
-      } catch (e) {
-        console.error(e);
+    doc.setFillColor(44, 27, 69);
+    doc.rect(0, 0, pageW, 70, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.text("Reporte de métricas · Bitácora", 40, 32);
+    doc.setFontSize(9.5);
+    doc.setTextColor(220, 210, 225);
+    doc.text(`Generado el ${new Date().toLocaleDateString("es-AR")}  ·  Categoría: ${catName}  ·  Cliente: ${clientName}  ·  Período: ${dateFrom || "sin límite"} a ${dateTo || "sin límite"}`, 40, 52);
+    let y = 96;
+    doc.setTextColor(44, 27, 69);
+    doc.setFontSize(12.5);
+    doc.text(`Total: ${totals.total}    Cumplidas: ${totals.done}    Pendientes: ${totals.pending}    Vencidas: ${totals.overdue}    Canceladas: ${totals.cancelled}`, 40, y);
+    y += 20;
+    const imgW = (pageW - 80 - 20) / 2;
+    try {
+      if (barChart.current) {
+        doc.addImage(barChart.current.toBase64Image(), "PNG", 40, y, pageW - 80, 200);
+        y += 216;
       }
+    } catch (e) {
+      console.error(e);
     }
-    doc.setFontSize(11);
-    rows.forEach(r => {
-      if (y > 760) {
-        doc.addPage();
-        y = 50;
-      }
+    try {
+      if (pieCatChart.current) doc.addImage(pieCatChart.current.toBase64Image(), "PNG", 40, y, imgW, 180);
+      if (pieClientChart.current) doc.addImage(pieClientChart.current.toBase64Image(), "PNG", 40 + imgW + 20, y, imgW, 180);
+      y += 196;
+    } catch (e) {
+      console.error(e);
+    }
+    const body = rows.map(r => {
       const pct = r.total > 0 ? Math.round(r.done / r.total * 100) : 0;
-      doc.text(`${r.category.name}: ${r.total} en total, ${r.done} cumplidas (${pct}%), ${r.pending} pendientes, ${r.overdue} vencidas, ${r.cancelled} canceladas`, 40, y);
-      y += 18;
+      return [r.category.name, String(r.total), String(r.done), String(r.pending), String(r.overdue), String(r.cancelled), `${pct}%`];
     });
+    if (doc.autoTable) {
+      doc.autoTable({
+        startY: y,
+        head: [["Categoría", "Total", "Cumplidas", "Pendientes", "Vencidas", "Canceladas", "% cumplido"]],
+        body,
+        headStyles: {
+          fillColor: [44, 27, 69],
+          textColor: 255,
+          fontSize: 9.5
+        },
+        bodyStyles: {
+          fontSize: 9.5
+        },
+        alternateRowStyles: {
+          fillColor: [244, 243, 240]
+        },
+        margin: {
+          left: 40,
+          right: 40
+        }
+      });
+    }
     doc.save(`bitacora-metricas-${today}.pdf`);
   };
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -1941,10 +2064,67 @@ function MetricsPanel({
       padding: 16,
       marginBottom: 16
     }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: "#4C475A",
+      marginBottom: 8
+    }
+  }, "Estado por categoría"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 220
+    }
   }, /*#__PURE__*/React.createElement("canvas", {
-    ref: chartRef,
-    height: "90"
-  })), /*#__PURE__*/React.createElement("div", null, rows.map(d => {
+    ref: barRef
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 14,
+      marginBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#fff",
+      border: `1px solid ${LINE}`,
+      borderRadius: 10,
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: "#4C475A",
+      marginBottom: 8
+    }
+  }, "% por categoría"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 200
+    }
+  }, /*#__PURE__*/React.createElement("canvas", {
+    ref: pieCatRef
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#fff",
+      border: `1px solid ${LINE}`,
+      borderRadius: 10,
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: "#4C475A",
+      marginBottom: 8
+    }
+  }, "% por cliente"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 200
+    }
+  }, /*#__PURE__*/React.createElement("canvas", {
+    ref: pieClientRef
+  })))), /*#__PURE__*/React.createElement("div", null, rows.map(d => {
     const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
     return /*#__PURE__*/React.createElement("div", {
       key: d.category.id,
