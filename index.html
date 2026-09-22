@@ -1501,6 +1501,7 @@ function TareasView({
   setConfirmingDelete
 }) {
   const [statusFilter, setStatusFilter] = useState("pendientes");
+  const [dateLimit, setDateLimit] = useState("todas");
   const [groupBy, setGroupBy] = useState("fecha");
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState({});
@@ -1527,12 +1528,19 @@ function TareasView({
   const filtered = useMemo(() => {
     let out = items;
     if (statusFilter === "pendientes") out = out.filter(i => i.status === "pending");else if (statusFilter === "cumplidas") out = out.filter(i => i.status === "done");else if (statusFilter === "vencidas") out = out.filter(i => i.status === "pending" && i.date < today);else if (statusFilter === "canceladas") out = out.filter(i => i.status === "cancelled");
+    if (dateLimit === "hoy") out = out.filter(i => i.date <= today);
+    else if (dateLimit === "semana") {
+      const d = parseISO(today);
+      const dow = (d.getDay() + 6) % 7;
+      const endOfWeek = addDaysISO(today, 6 - dow);
+      out = out.filter(i => i.date <= endOfWeek);
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       out = out.filter(i => i.task.title.toLowerCase().includes(q));
     }
     return out;
-  }, [items, statusFilter, search, today]);
+  }, [items, statusFilter, dateLimit, search, today]);
   const groups = useMemo(() => {
     const map = {};
     const order = [];
@@ -1600,6 +1608,19 @@ function TareasView({
     style: {
       ...styles.chipBtn,
       ...(statusFilter === key ? styles.chipBtnActive : {})
+    }
+  }, label)))), /*#__PURE__*/React.createElement("div", {
+    style: { minWidth: 180 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.formLabel
+  }, "Hasta"), /*#__PURE__*/React.createElement("div", {
+    style: styles.chipRow
+  }, [["todas", "Todas"], ["hoy", "Hasta hoy"], ["semana", "Hasta esta semana"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setDateLimit(key),
+    style: {
+      ...styles.chipBtn,
+      ...(dateLimit === key ? styles.chipBtnActive : {})
     }
   }, label)))), /*#__PURE__*/React.createElement("label", {
     style: styles.formField
@@ -1907,7 +1928,9 @@ function ClientColumn({
 }) {
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      flex: "0 0 260px",
+      flex: "1 1 260px",
+      minWidth: 240,
+      maxWidth: 340,
       background: "#F4F3F0",
       border: `1px solid ${LINE}`,
       borderRadius: 10,
@@ -2070,9 +2093,9 @@ function TableroView({
   }, "Nada pendiente hasta hoy")) : /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
+      flexWrap: "wrap",
       gap: 14,
-      overflowX: "auto",
-      paddingBottom: 8
+      alignItems: "flex-start"
     }
   }, byClient.map(col => /*#__PURE__*/React.createElement(ClientColumn, {
     key: col.client ? col.client.id : "__sin__",
