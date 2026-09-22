@@ -375,6 +375,52 @@ async function gcalDeleteEvent(token, eventId) {
     throw new Error(err.error && err.error.message || `HTTP ${res.status}`);
   }
 }
+class ViewErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      error: null
+    };
+  }
+  static getDerivedStateFromError(error) {
+    return {
+      error
+    };
+  }
+  componentDidCatch(error, info) {
+    console.error("Error en vista", this.props.label, error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          background: "#FBEFEC",
+          border: "1px solid #E0B3A6",
+          borderRadius: 10,
+          padding: 18,
+          color: "#7A2E1F"
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          marginBottom: 6
+        }
+      }, "⚠ Esta vista (", this.props.label, ") tuvo un error y no pudo dibujarse"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12.5,
+          fontFamily: "monospace",
+          whiteSpace: "pre-wrap",
+          marginBottom: 10
+        }
+      }, String(this.state.error && (this.state.error.message || this.state.error))), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12
+        }
+      }, "Sacale captura a este recuadro y mandaselo a Claude — con el mensaje exacto se arregla directo, sin adivinar."));
+    }
+    return this.props.children;
+  }
+}
 function Plandia() {
   const [authLoading, setAuthLoading] = useState(true);
   const [user, setUser] = useState(null);
@@ -1358,13 +1404,16 @@ function Plandia() {
   }), /*#__PURE__*/React.createElement("div", {
     className: "pld-scroll",
     style: styles.list
-  }, view === "kpi" ? /*#__PURE__*/React.createElement(MetricsPanel, {
+  }, view === "kpi" ? /*#__PURE__*/React.createElement(ViewErrorBoundary, { label: "Métricas" }, /*#__PURE__*/React.createElement(MetricsPanel, {
     categories: categories,
     clients: clients,
     tasks: tasks,
     overrides: overrides,
-    today: today
-  }) : view === "tablero" ? /*#__PURE__*/React.createElement(TableroView, {
+    today: today,
+    setView: setView,
+    setActiveCategory: setActiveCategory,
+    setActiveClient: setActiveClient
+  })) : view === "tablero" ? /*#__PURE__*/React.createElement(ViewErrorBoundary, { label: "Tablero" }, /*#__PURE__*/React.createElement(TableroView, {
     tasks: tasks,
     categories: categories,
     clients: clients,
@@ -1376,7 +1425,7 @@ function Plandia() {
     clientById: clientById,
     setStatus: setStatus,
     onQuickEdit: editTask
-  }) : view === "calendario" ? /*#__PURE__*/React.createElement(CalendarView, {
+  })) : view === "calendario" ? /*#__PURE__*/React.createElement(ViewErrorBoundary, { label: "Calendario" }, /*#__PURE__*/React.createElement(CalendarView, {
     tasks: tasks,
     categories: categories,
     clients: clients,
@@ -1399,7 +1448,7 @@ function Plandia() {
     onQuickEdit: editTask,
     confirmingDelete: confirmingDelete,
     setConfirmingDelete: setConfirmingDelete
-  }) : /*#__PURE__*/React.createElement(TareasView, {
+  })) : /*#__PURE__*/React.createElement(ViewErrorBoundary, { label: "Tareas" }, /*#__PURE__*/React.createElement(TareasView, {
     tasks: tasks,
     categories: categories,
     clients: clients,
@@ -1422,7 +1471,7 @@ function Plandia() {
     onQuickEdit: editTask,
     confirmingDelete: confirmingDelete,
     setConfirmingDelete: setConfirmingDelete
-  }))));
+  })))));
 }
 const STATUS_FILTERS = [["todas", "Todas"], ["pendientes", "Pendientes"], ["cumplidas", "Cumplidas"], ["vencidas", "Vencidas"], ["canceladas", "Canceladas"]];
 const GROUP_OPTIONS = [["fecha", "Fecha"], ["categoria", "Categoría"], ["cliente", "Cliente"], ["urgencia", "Urgencia"]];
@@ -2118,7 +2167,10 @@ function MetricsPanel({
   clients,
   tasks,
   overrides,
-  today
+  today,
+  setView,
+  setActiveCategory,
+  setActiveClient
 }) {
   const [catFilter, setCatFilter] = useState("");
   const [clientFilter, setClientFilter] = useState("");
@@ -2445,7 +2497,24 @@ function MetricsPanel({
       gap: 12,
       alignItems: "flex-end"
     }
-  }, /*#__PURE__*/React.createElement("label", {
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Acceso rápido"), /*#__PURE__*/React.createElement("div", {
+    style: { display: "flex", gap: 6 }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => { setDateFrom(today); setDateTo(today); },
+    style: styles.kpiScopeBtn
+  }, "Hoy"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const d = parseISO(today);
+      const dow = (d.getDay() + 6) % 7;
+      setDateFrom(addDaysISO(today, -dow));
+      setDateTo(addDaysISO(today, 6 - dow));
+    },
+    style: styles.kpiScopeBtn
+  }, "Esta semana"))), /*#__PURE__*/React.createElement("label", {
     style: styles.formField
   }, /*#__PURE__*/React.createElement("span", {
     style: styles.formLabel
@@ -2467,7 +2536,13 @@ function MetricsPanel({
     style: styles.formSave,
     onClick: exportPDF,
     disabled: rows.length === 0
-  }, "⬇ Exportar PDF"))), rows.length === 0 && catDist.items.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "⬇ Exportar PDF"), setView && /*#__PURE__*/React.createElement("button", {
+    style: { ...styles.formCancelSmall, border: "1px solid #E3E1E6", borderRadius: 7, padding: "7px 12px" },
+    onClick: () => { setActiveCategory(catFilter || null); setActiveClient(clientFilter || null); setView("tareas"); }
+  }, "Ver en Tareas →"), setView && /*#__PURE__*/React.createElement("button", {
+    style: { ...styles.formCancelSmall, border: "1px solid #E3E1E6", borderRadius: 7, padding: "7px 12px" },
+    onClick: () => { setActiveCategory(catFilter || null); setActiveClient(clientFilter || null); setView("tablero"); }
+  }, "Ver en Tablero →"))), rows.length === 0 && catDist.items.length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: styles.empty
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 26,
@@ -2692,6 +2767,21 @@ function MetricsPanel({
       }
     }, d.cancelled, " canceladas")));
   }))));
+}
+const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+function monthMatrix(year, month) {
+  const first = new Date(year, month, 1);
+  const startOffset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startOffset; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
 }
 function CalendarView({
   tasks,
