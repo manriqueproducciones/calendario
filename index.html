@@ -1715,10 +1715,13 @@ function KanbanCard({
   categories,
   clients,
   onQuickEdit,
-  onDragStart
+  onMarkDone,
+  onReopen
 }) {
   const urg = URGENCY[it.task.urgency];
   const overdue = it.status === "pending" && it.date < it.__today;
+  const done = it.status === "done";
+  const cancelled = it.status === "cancelled";
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(it.task.title);
   const [editingDate, setEditingDate] = useState(false);
@@ -1732,11 +1735,6 @@ function KanbanCard({
     });else setTitleDraft(it.task.title);
   };
   return /*#__PURE__*/React.createElement("div", {
-    draggable: !editingTitle && !editingDate,
-    onDragStart: e => {
-      e.dataTransfer.setData("text/plain", it.key);
-      onDragStart && onDragStart();
-    },
     style: {
       background: "#fff",
       border: `1px solid ${LINE}`,
@@ -1744,8 +1742,38 @@ function KanbanCard({
       borderRadius: 8,
       padding: "9px 10px",
       marginBottom: 8,
-      cursor: "grab",
-      boxShadow: "0 1px 2px rgba(44,27,69,0.06)"
+      boxShadow: "0 1px 2px rgba(44,27,69,0.06)",
+      opacity: done || cancelled ? 0.6 : 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => done || cancelled ? onReopen(it.key) : onMarkDone(it.key),
+    title: done ? "Reabrir" : cancelled ? "Reabrir" : "Marcar como cumplida",
+    style: {
+      width: 20,
+      height: 20,
+      borderRadius: "50%",
+      border: `1.4px solid ${done ? "#5A7A55" : "#D7D3DC"}`,
+      background: done ? "#5A7A55" : "transparent",
+      color: "#fff",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      cursor: "pointer",
+      flexShrink: 0,
+      marginTop: 1
+    }
+  }, done ? /*#__PURE__*/React.createElement(Ic, {
+    size: 11
+  }, "✓") : null), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
     }
   }, editingTitle ? /*#__PURE__*/React.createElement("input", {
     autoFocus: true,
@@ -1778,7 +1806,8 @@ function KanbanCard({
       gap: 6,
       fontSize: 13,
       fontWeight: 500,
-      color: "#2C1B45",
+      color: done || cancelled ? "#8A8A93" : "#2C1B45",
+      textDecoration: done || cancelled ? "line-through" : "none",
       marginBottom: 4,
       cursor: "text"
     }
@@ -1823,7 +1852,8 @@ function KanbanCard({
     onChange: e => quickEdit({
       clientId: e.target.value || null
     }),
-    style: styles.inlineSelect
+    style: styles.inlineSelect,
+    title: "Mover a otro cliente"
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
   }, "Sin cliente"), clients.map(c => /*#__PURE__*/React.createElement("option", {
@@ -1858,41 +1888,31 @@ function KanbanCard({
       cursor: "pointer",
       textDecoration: "underline dotted"
     }
-  }, fmtShort(it.date))));
+  }, overdue ? "⚠ " : "", fmtShort(it.date)), cancelled && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#B0503A",
+      fontWeight: 600
+    }
+  }, "cancelada")))));
 }
-function KanbanColumn({
-  title,
-  color,
+function ClientColumn({
+  client,
   items,
-  catById,
-  clientById,
   categories,
   clients,
+  catById,
   onQuickEdit,
-  onDropStatus,
-  targetStatus
+  onMarkDone,
+  onReopen
 }) {
-  const [over, setOver] = useState(false);
   return /*#__PURE__*/React.createElement("div", {
-    onDragOver: e => {
-      e.preventDefault();
-      setOver(true);
-    },
-    onDragLeave: () => setOver(false),
-    onDrop: e => {
-      e.preventDefault();
-      setOver(false);
-      const key = e.dataTransfer.getData("text/plain");
-      if (key) onDropStatus(key, targetStatus);
-    },
     style: {
-      flex: 1,
-      minWidth: 240,
-      background: over ? "#F3E9F1" : "#F4F3F0",
-      border: `1px dashed ${over ? "#8B4F82" : LINE}`,
+      flex: "0 0 260px",
+      background: "#F4F3F0",
+      border: `1px solid ${LINE}`,
       borderRadius: 10,
       padding: 12,
-      minHeight: 200
+      minHeight: 120
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1909,9 +1929,9 @@ function KanbanColumn({
       width: 8,
       height: 8,
       borderRadius: "50%",
-      background: color
+      background: client ? client.color : "#C7C4B3"
     }
-  }), title, " ", /*#__PURE__*/React.createElement("span", {
+  }), client ? client.name : "Sin cliente", " ", /*#__PURE__*/React.createElement("span", {
     style: {
       fontWeight: 400,
       color: "#8A8A93"
@@ -1922,17 +1942,16 @@ function KanbanColumn({
       color: "#8A8A93",
       padding: "6px 0"
     }
-  }, "Arrastrá una tarjeta acá"), items.map(it => /*#__PURE__*/React.createElement(KanbanCard, {
+  }, "Nada pendiente por ahora."), items.map(it => /*#__PURE__*/React.createElement(KanbanCard, {
     key: it.key,
-    it: {
-      ...it,
-      __today: it.__today
-    },
+    it: it,
     cat: catById[it.task.categoryId],
-    client: clientById[it.task.clientId],
+    client: client,
     categories: categories,
     clients: clients,
-    onQuickEdit: onQuickEdit
+    onQuickEdit: onQuickEdit,
+    onMarkDone: onMarkDone,
+    onReopen: onReopen
   })));
 }
 function TableroView({
@@ -1950,7 +1969,7 @@ function TableroView({
 }) {
   const [showDone, setShowDone] = useState(false);
   const items = useMemo(() => {
-    const rangeStart = addDaysISO(today, -7);
+    const rangeStart = addDaysISO(today, -30);
     const rangeEnd = addDaysISO(today, 30);
     const all = [];
     tasks.forEach(task => {
@@ -1968,69 +1987,104 @@ function TableroView({
         });
       });
     });
-    all.sort((a, b) => a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.task.title.localeCompare(b.task.title));
     return all;
   }, [tasks, overrides, activeCategory, activeClient, today]);
-  const pending = items.filter(i => i.status === "pending");
-  const done = items.filter(i => i.status === "done");
-  const cancelled = items.filter(i => i.status === "cancelled");
-  const handleDrop = (key, targetStatus) => {
+
+  // Pendientes: solo hasta hoy inclusive, para no inundar el tablero con trabajo futuro.
+  const visible = useMemo(() => {
+    return items.filter(it => {
+      if (it.status === "pending") return it.date <= today;
+      return showDone; // cumplidas/canceladas solo si el toggle está activo
+    });
+  }, [items, today, showDone]);
+  const byClient = useMemo(() => {
+    const map = {};
+    const order = [];
+    visible.forEach(it => {
+      const cid = it.task.clientId || "__sin__";
+      if (!map[cid]) {
+        map[cid] = [];
+        order.push(cid);
+      }
+      map[cid].push(it);
+    });
+    Object.values(map).forEach(arr => arr.sort((a, b) => {
+      const ua = urgencyRank(a.task.urgency),
+        ub = urgencyRank(b.task.urgency);
+      if (ua !== ub) return ua - ub;
+      return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+    }));
+    const cols = order.map(cid => ({
+      client: cid === "__sin__" ? null : clientById[cid],
+      items: map[cid]
+    }));
+    cols.sort((a, b) => {
+      if (!a.client) return 1;
+      if (!b.client) return -1;
+      return a.client.name.localeCompare(b.client.name);
+    });
+    return cols;
+  }, [visible, clientById]);
+  const hiddenCount = items.filter(it => it.status !== "pending").length;
+  const handleMarkDone = key => setStatus(key, "done");
+  const handleReopen = key => {
     const it = items.find(i => i.key === key);
     if (!it) return;
-    if (it.status === targetStatus) return;
-    setStatus(key, targetStatus);
+    setStatus(key, it.status); // toggle: si ya es done/cancelled, vuelve a pending
   };
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 14,
+      flexWrap: "wrap",
+      gap: 8
+    }
   }, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12.5,
       color: "#8A8A93",
       margin: 0
     }
-  }, "Arrastrá una tarjeta entre columnas para cambiar su estado, o tocá los campos de cada tarjeta para editarla al toque. Ordenadas por fecha. Muestra los próximos 30 días y la última semana."), /*#__PURE__*/React.createElement("button", {
+  }, "Agrupado por cliente. Solo se muestra lo pendiente hasta hoy — nada de trabajo futuro, para no inundar."), /*#__PURE__*/React.createElement("button", {
     onClick: () => setShowDone(v => !v),
-    style: { ...styles.kpiScopeBtn, ...(showDone ? styles.kpiScopeBtnActive : {}) }
-  }, showDone ? "Ocultar cumplidas y canceladas" : `Mostrar cumplidas y canceladas (${done.length + cancelled.length})`)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...styles.kpiScopeBtn,
+      ...(showDone ? styles.kpiScopeBtnActive : {})
+    }
+  }, showDone ? "Ocultar cumplidas y canceladas" : `Mostrar cumplidas y canceladas (${hiddenCount})`)), byClient.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: styles.empty
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 26,
+    style: {
+      opacity: 0.4,
+      marginBottom: 10
+    }
+  }, "🗓"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0,
+      fontWeight: 500,
+      color: "#2C1B45"
+    }
+  }, "Nada pendiente hasta hoy")) : /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 14,
-      alignItems: "flex-start"
+      overflowX: "auto",
+      paddingBottom: 8
     }
-  }, /*#__PURE__*/React.createElement(KanbanColumn, {
-    title: "Pendiente",
-    color: "#C98A2A",
-    items: pending,
-    catById: catById,
-    clientById: clientById,
+  }, byClient.map(col => /*#__PURE__*/React.createElement(ClientColumn, {
+    key: col.client ? col.client.id : "__sin__",
+    client: col.client,
+    items: col.items,
     categories: categories,
     clients: clients,
-    onQuickEdit: onQuickEdit,
-    onDropStatus: handleDrop,
-    targetStatus: "pending"
-  }), showDone && /*#__PURE__*/React.createElement(KanbanColumn, {
-    title: "Hecho",
-    color: "#5A7A55",
-    items: done,
     catById: catById,
-    clientById: clientById,
-    categories: categories,
-    clients: clients,
     onQuickEdit: onQuickEdit,
-    onDropStatus: handleDrop,
-    targetStatus: "done"
-  }), showDone && /*#__PURE__*/React.createElement(KanbanColumn, {
-    title: "Cancelada",
-    color: "#8A8A93",
-    items: cancelled,
-    catById: catById,
-    clientById: clientById,
-    categories: categories,
-    clients: clients,
-    onQuickEdit: onQuickEdit,
-    onDropStatus: handleDrop,
-    targetStatus: "cancelled"
-  })));
+    onMarkDone: handleMarkDone,
+    onReopen: handleReopen
+  }))));
 }
 const URGENCY_OPTIONS = [["alta", "Alta"], ["media", "Media"], ["baja", "Baja"]];
 const PIE_PALETTE = ["#8B4F82", "#33566B", "#C98A2A", "#5A7A55", "#B0503A", "#6E4C77", "#4F6B52", "#8A8A93", "#B27CA8", "#7A3B45"];
@@ -2504,17 +2558,16 @@ function MetricsPanel({
   }, "Acceso rápido"), /*#__PURE__*/React.createElement("div", {
     style: { display: "flex", gap: 6 }
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => { setDateFrom(today); setDateTo(today); },
+    onClick: () => setDateTo(today),
     style: styles.kpiScopeBtn
-  }, "Hoy"), /*#__PURE__*/React.createElement("button", {
+  }, "Hasta hoy"), /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       const d = parseISO(today);
       const dow = (d.getDay() + 6) % 7;
-      setDateFrom(addDaysISO(today, -dow));
       setDateTo(addDaysISO(today, 6 - dow));
     },
     style: styles.kpiScopeBtn
-  }, "Esta semana"))), /*#__PURE__*/React.createElement("label", {
+  }, "Hasta esta semana"))), /*#__PURE__*/React.createElement("label", {
     style: styles.formField
   }, /*#__PURE__*/React.createElement("span", {
     style: styles.formLabel
