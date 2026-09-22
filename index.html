@@ -2075,6 +2075,44 @@ function PctBarList({
     })));
   }));
 }
+function HeroStat({
+  label,
+  pct,
+  sub,
+  color
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      background: "#fff",
+      border: `1px solid ${LINE}`,
+      borderRadius: 12,
+      padding: "18px 20px",
+      minWidth: 160
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 36,
+      fontWeight: 700,
+      color,
+      fontFamily: "'Space Grotesk', sans-serif",
+      lineHeight: 1
+    }
+  }, pct, "%"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: "#2C1B45",
+      marginTop: 6
+    }
+  }, label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#8A8A93",
+      marginTop: 2
+    }
+  }, sub));
+}
 function MetricsPanel({
   categories,
   clients,
@@ -2103,6 +2141,42 @@ function MetricsPanel({
   }, [chartsReady]);
   const rangeStart = dateFrom || "0000-01-01";
   const rangeEnd = dateTo || "9999-12-31";
+
+  // Todo el panel comparte el mismo set de ocurrencias filtradas: categoría + cliente + fecha.
+  const filteredItems = useMemo(() => {
+    const out = [];
+    tasks.forEach(task => {
+      if (catFilter && task.categoryId !== catFilter) return;
+      if (clientFilter && task.clientId !== clientFilter) return;
+      occurrences(task, rangeStart, rangeEnd).forEach(date => {
+        const key = `${task.id}__${date}`;
+        const status = overrides[key] || "pending";
+        out.push({
+          task,
+          date,
+          status
+        });
+      });
+    });
+    return out;
+  }, [tasks, catFilter, clientFilter, rangeStart, rangeEnd, overrides]);
+  const totals = useMemo(() => {
+    const t = {
+      total: 0,
+      done: 0,
+      pending: 0,
+      cancelled: 0,
+      overdue: 0
+    };
+    filteredItems.forEach(it => {
+      t.total++;
+      if (it.status === "done") t.done++;else if (it.status === "cancelled") t.cancelled++;else {
+        t.pending++;
+        if (it.date < today) t.overdue++;
+      }
+    });
+    return t;
+  }, [filteredItems, today]);
   const rows = useMemo(() => {
     const byCat = {};
     categories.forEach(c => {
@@ -2116,39 +2190,19 @@ function MetricsPanel({
         total: 0
       };
     });
-    tasks.forEach(task => {
-      if (catFilter && task.categoryId !== catFilter) return;
-      if (clientFilter && task.clientId !== clientFilter) return;
-      const stat = byCat[task.categoryId];
+    filteredItems.forEach(it => {
+      const stat = byCat[it.task.categoryId];
       if (!stat) return;
-      occurrences(task, rangeStart, rangeEnd).forEach(date => {
-        const key = `${task.id}__${date}`;
-        const status = overrides[key] || "pending";
-        stat.total++;
-        if (status === "done") stat.done++;else if (status === "cancelled") stat.cancelled++;else {
-          stat.pending++;
-          if (date < today) stat.overdue++;
-        }
-      });
+      stat.total++;
+      if (it.status === "done") stat.done++;else if (it.status === "cancelled") stat.cancelled++;else {
+        stat.pending++;
+        if (it.date < today) stat.overdue++;
+      }
     });
     return Object.values(byCat).filter(s => s.total > 0);
-  }, [categories, tasks, overrides, catFilter, clientFilter, rangeStart, rangeEnd, today]);
-  const totals = rows.reduce((acc, d) => {
-    acc.total += d.total;
-    acc.done += d.done;
-    acc.pending += d.pending;
-    acc.cancelled += d.cancelled;
-    acc.overdue += d.overdue;
-    return acc;
-  }, {
-    total: 0,
-    done: 0,
-    pending: 0,
-    cancelled: 0,
-    overdue: 0
-  });
+  }, [filteredItems, categories, catFilter, today]);
 
-  // % por categoría: respeta fecha + cliente elegido (no se autofiltra por categoría)
+  // % por categoría y % por cliente: ahora respetan TODOS los filtros activos, igual que el resto del panel.
   const catDist = useMemo(() => {
     const byCat = {};
     categories.forEach(c => {
@@ -2158,11 +2212,8 @@ function MetricsPanel({
         count: 0
       };
     });
-    tasks.forEach(task => {
-      if (clientFilter && task.clientId !== clientFilter) return;
-      const stat = byCat[task.categoryId];
-      if (!stat) return;
-      stat.count += occurrences(task, rangeStart, rangeEnd).length;
+    filteredItems.forEach(it => {
+      if (byCat[it.task.categoryId]) byCat[it.task.categoryId].count++;
     });
     const items = Object.values(byCat).filter(c => c.count > 0).sort((a, b) => b.count - a.count);
     const total = items.reduce((s, c) => s + c.count, 0);
@@ -2170,9 +2221,7 @@ function MetricsPanel({
       items,
       total
     };
-  }, [categories, tasks, rangeStart, rangeEnd, clientFilter]);
-
-  // % por cliente: respeta fecha + categoría elegida (no se autofiltra por cliente)
+  }, [categories, filteredItems]);
   const clientDist = useMemo(() => {
     const byClient = {};
     clients.forEach((c, i) => {
@@ -2183,11 +2232,8 @@ function MetricsPanel({
       };
     });
     let sinCliente = 0;
-    tasks.forEach(task => {
-      if (catFilter && task.categoryId !== catFilter) return;
-      const n = occurrences(task, rangeStart, rangeEnd).length;
-      if (!n) return;
-      if (task.clientId && byClient[task.clientId]) byClient[task.clientId].count += n;else sinCliente += n;
+    filteredItems.forEach(it => {
+      if (it.task.clientId && byClient[it.task.clientId]) byClient[it.task.clientId].count++;else sinCliente++;
     });
     const items = Object.values(byClient).filter(c => c.count > 0).sort((a, b) => b.count - a.count);
     if (sinCliente > 0) items.push({
@@ -2200,7 +2246,7 @@ function MetricsPanel({
       items,
       total
     };
-  }, [clients, tasks, rangeStart, rangeEnd, catFilter]);
+  }, [clients, filteredItems]);
   const makePie = (ref, instRef, dist) => {
     if (!ref.current || typeof Chart === "undefined") return;
     if (instRef.current) instRef.current.destroy();
@@ -2237,6 +2283,8 @@ function MetricsPanel({
   useEffect(() => {
     makePie(pieClientRef, pieClientChart, clientDist);
   }, [clientDist, chartsReady]);
+  const cumplPct = totals.total > 0 ? Math.round(totals.done / totals.total * 100) : 0;
+  const atrasPct = totals.total > 0 ? Math.round(totals.overdue / totals.total * 100) : 0;
   const exportPDF = () => {
     if (!window.jspdf) {
       alert("La librería de PDF todavía está cargando, esperá un segundo y probá de nuevo.");
@@ -2262,7 +2310,11 @@ function MetricsPanel({
     doc.text(`Generado el ${new Date().toLocaleDateString("es-AR")}  ·  Categoría: ${catName}  ·  Cliente: ${clientName}  ·  Período: ${dateFrom || "sin límite"} a ${dateTo || "sin límite"}`, 40, 52);
     let y = 96;
     doc.setTextColor(44, 27, 69);
-    doc.setFontSize(12.5);
+    doc.setFontSize(14);
+    doc.text(`% Cumplimiento: ${cumplPct}%    % Atrasados: ${atrasPct}%`, 40, y);
+    y += 18;
+    doc.setFontSize(11);
+    doc.setTextColor(80, 75, 90);
     doc.text(`Total: ${totals.total}    Cumplidas: ${totals.done}    Pendientes: ${totals.pending}    Vencidas: ${totals.overdue}    Canceladas: ${totals.cancelled}`, 40, y);
     y += 24;
     const drawDistTable = (title, dist, startY) => {
@@ -2331,10 +2383,10 @@ function MetricsPanel({
     doc.save(`bitacora-metricas-${today}.pdf`);
   };
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: styles.metricsFilterRow
+    style: styles.metricsFilterCard
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      minWidth: 160
+      marginBottom: 12
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: styles.formLabel
@@ -2359,13 +2411,16 @@ function MetricsPanel({
     }
   }, c.name)))), /*#__PURE__*/React.createElement("div", {
     style: {
-      minWidth: 220,
-      flex: 1
+      marginBottom: 12
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: styles.formLabel
   }, "Cliente"), /*#__PURE__*/React.createElement("div", {
-    style: styles.chipRow
+    style: {
+      ...styles.chipRow,
+      maxHeight: 76,
+      overflowY: "auto"
+    }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => setClientFilter(""),
     style: {
@@ -2383,7 +2438,14 @@ function MetricsPanel({
         borderColor: c.color || PIE_PALETTE[i % PIE_PALETTE.length]
       } : {})
     }
-  }, c.name)))), /*#__PURE__*/React.createElement("label", {
+  }, c.name)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 12,
+      alignItems: "flex-end"
+    }
+  }, /*#__PURE__*/React.createElement("label", {
     style: styles.formField
   }, /*#__PURE__*/React.createElement("span", {
     style: styles.formLabel
@@ -2405,7 +2467,7 @@ function MetricsPanel({
     style: styles.formSave,
     onClick: exportPDF,
     disabled: rows.length === 0
-  }, "⬇ Exportar PDF")), rows.length === 0 && catDist.items.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "⬇ Exportar PDF"))), rows.length === 0 && catDist.items.length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: styles.empty
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 26,
@@ -2420,28 +2482,71 @@ function MetricsPanel({
       color: "#2C1B45"
     }
   }, "No hay datos para estos filtros")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    style: styles.kpiSummaryRow
-  }, /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Total",
-    value: totals.total,
-    color: "#2C1B45"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Cumplidas",
-    value: totals.done,
+    style: {
+      display: "flex",
+      gap: 14,
+      marginBottom: 16,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement(HeroStat, {
+    label: "Cumplimiento",
+    pct: cumplPct,
+    sub: `${totals.done} de ${totals.total} cumplidas`,
     color: "#5A7A55"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Pendientes",
-    value: totals.pending,
-    color: "#C98A2A"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Vencidas",
-    value: totals.overdue,
+  }), /*#__PURE__*/React.createElement(HeroStat, {
+    label: "Atrasados",
+    pct: atrasPct,
+    sub: `${totals.overdue} de ${totals.total} vencidas`,
     color: "#C1442D"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Canceladas",
-    value: totals.cancelled,
-    color: "#8A8A93"
-  })), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 2,
+      minWidth: 240,
+      background: "#fff",
+      border: `1px solid ${LINE}`,
+      borderRadius: 12,
+      padding: "18px 20px",
+      display: "flex",
+      gap: 18,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 700,
+      color: "#2C1B45",
+      fontFamily: "'Space Grotesk', sans-serif"
+    }
+  }, totals.total), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#8A8A93"
+    }
+  }, "Total")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 700,
+      color: "#C98A2A",
+      fontFamily: "'Space Grotesk', sans-serif"
+    }
+  }, totals.pending), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#8A8A93"
+    }
+  }, "Pendientes")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 700,
+      color: "#8A8A93",
+      fontFamily: "'Space Grotesk', sans-serif"
+    }
+  }, totals.cancelled), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#8A8A93"
+    }
+  }, "Canceladas")))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
@@ -2467,7 +2572,7 @@ function MetricsPanel({
       color: "#2C1B45",
       marginBottom: 10
     }
-  }, "% por categoría", clientFilter ? ` — ${(clients.find(c => c.id === clientFilter) || {}).name || ""}` : ""), chartsReady && catDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "% por categoría"), chartsReady && catDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       height: 150,
       marginBottom: 12,
@@ -2504,7 +2609,7 @@ function MetricsPanel({
       color: "#2C1B45",
       marginBottom: 10
     }
-  }, "% por cliente", catFilter ? ` — ${(categories.find(c => c.id === catFilter) || {}).name || ""}` : ""), chartsReady && clientDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "% por cliente"), chartsReady && clientDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       height: 150,
       marginBottom: 12,
@@ -2529,7 +2634,7 @@ function MetricsPanel({
       color: "#2C1B45",
       margin: "4px 0 10px"
     }
-  }, "Detalle por categoría (según filtros de arriba)"), /*#__PURE__*/React.createElement("div", null, rows.map(d => {
+  }, "Detalle por categoría"), /*#__PURE__*/React.createElement("div", null, rows.map(d => {
     const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
     return /*#__PURE__*/React.createElement("div", {
       key: d.category.id,
@@ -2587,22 +2692,6 @@ function MetricsPanel({
       }
     }, d.cancelled, " canceladas")));
   }))));
-}
-const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
-function monthMatrix(year, month) {
-  // month: 0-11. Devuelve semanas (arrays de 7 días ISO o null) empezando en lunes.
-  const first = new Date(year, month, 1);
-  const startOffset = (first.getDay() + 6) % 7; // 0 = lunes
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [];
-  for (let i = 0; i < startOffset; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) {
-    cells.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
-  }
-  while (cells.length % 7 !== 0) cells.push(null);
-  const weeks = [];
-  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
-  return weeks;
 }
 function CalendarView({
   tasks,
@@ -4392,6 +4481,13 @@ const styles = {
     flexWrap: "wrap",
     gap: 12,
     alignItems: "flex-end",
+    background: "#fff",
+    border: "1px solid #E3E1E6",
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 16
+  },
+  metricsFilterCard: {
     background: "#fff",
     border: "1px solid #E3E1E6",
     borderRadius: 10,
