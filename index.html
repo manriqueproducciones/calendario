@@ -1991,6 +1991,15 @@ function TableroView({
   onQuickEdit
 }) {
   const [showDone, setShowDone] = useState(false);
+  const [dateScope, setDateScope] = useState("hoy");
+  const cutoff = useMemo(() => {
+    if (dateScope === "semana") {
+      const d = parseISO(today);
+      const dow = (d.getDay() + 6) % 7;
+      return addDaysISO(today, 6 - dow);
+    }
+    return today;
+  }, [dateScope, today]);
   const items = useMemo(() => {
     const rangeStart = addDaysISO(today, -30);
     const rangeEnd = addDaysISO(today, 30);
@@ -2013,13 +2022,13 @@ function TableroView({
     return all;
   }, [tasks, overrides, activeCategory, activeClient, today]);
 
-  // Pendientes: solo hasta hoy inclusive, para no inundar el tablero con trabajo futuro.
+  // Pendientes: solo hasta el corte elegido (hoy o esta semana), para no inundar el tablero con trabajo futuro.
   const visible = useMemo(() => {
     return items.filter(it => {
-      if (it.status === "pending") return it.date <= today;
+      if (it.status === "pending") return it.date <= cutoff;
       return showDone; // cumplidas/canceladas solo si el toggle está activo
     });
-  }, [items, today, showDone]);
+  }, [items, cutoff, showDone]);
   const byClient = useMemo(() => {
     const map = {};
     const order = [];
@@ -2070,13 +2079,24 @@ function TableroView({
       color: "#8A8A93",
       margin: 0
     }
-  }, "Agrupado por cliente. Solo se muestra lo pendiente hasta hoy — nada de trabajo futuro, para no inundar."), /*#__PURE__*/React.createElement("button", {
+  }, "Agrupado por cliente. No muestra trabajo m\u00e1s all\u00e1 del corte elegido, para no inundar."), /*#__PURE__*/React.createElement("div", {
+    style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.chipRow
+  }, [["hoy", "Hasta hoy"], ["semana", "Hasta esta semana"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setDateScope(key),
+    style: {
+      ...styles.chipBtn,
+      ...(dateScope === key ? styles.chipBtnActive : {})
+    }
+  }, label))), /*#__PURE__*/React.createElement("button", {
     onClick: () => setShowDone(v => !v),
     style: {
       ...styles.kpiScopeBtn,
       ...(showDone ? styles.kpiScopeBtnActive : {})
     }
-  }, showDone ? "Ocultar cumplidas y canceladas" : `Mostrar cumplidas y canceladas (${hiddenCount})`)), byClient.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, showDone ? "Ocultar cumplidas y canceladas" : `Mostrar cumplidas y canceladas (${hiddenCount})`))), byClient.length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: styles.empty
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 26,
