@@ -1076,7 +1076,7 @@ function Plandia() {
     style: {
       marginTop: 16
     }
-  }, [["hoy", "Hoy"], ["proximos", "Próximos"], ["todo", "Todo"], ["categoria", "Por categoría"], ["kpi", "Métricas"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+  }, [["tareas", "Tareas"], ["tablero", "Tablero"], ["kpi", "Métricas"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
     key: key,
     onClick: () => setView(key),
     style: {
@@ -1275,7 +1275,7 @@ function Plandia() {
     style: styles.header
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
     style: styles.title
-  }, view === "hoy" ? "Hoy" : view === "proximos" ? "Próximos" : view === "categoria" ? "Por categoría" : view === "kpi" ? "Métricas" : "Todo"), /*#__PURE__*/React.createElement("p", {
+  }, view === "tareas" ? "Tareas" : view === "tablero" ? "Tablero" : "Métricas"), /*#__PURE__*/React.createElement("p", {
     style: styles.subtitle
   }, fmtLong(today))), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1364,7 +1364,196 @@ function Plandia() {
     tasks: tasks,
     overrides: overrides,
     today: today
-  }) : /*#__PURE__*/React.createElement(React.Fragment, null, (view === "categoria" ? categoryGroups.length === 0 : groups.length === 0) && /*#__PURE__*/React.createElement("div", {
+  }) : view === "tablero" ? /*#__PURE__*/React.createElement(TableroView, {
+    tasks: tasks,
+    categories: categories,
+    clients: clients,
+    overrides: overrides,
+    today: today,
+    activeCategory: activeCategory,
+    activeClient: activeClient,
+    catById: catById,
+    clientById: clientById,
+    setStatus: setStatus,
+    onQuickEdit: editTask
+  }) : /*#__PURE__*/React.createElement(TareasView, {
+    tasks: tasks,
+    categories: categories,
+    clients: clients,
+    overrides: overrides,
+    today: today,
+    activeCategory: activeCategory,
+    activeClient: activeClient,
+    catById: catById,
+    clientById: clientById,
+    expanded: expanded,
+    setExpanded: setExpanded,
+    setStatus: setStatus,
+    toggleSubtask: toggleSubtask,
+    toggleCTA: toggleCTA,
+    deleteTask: deleteTask,
+    retrySync: retrySync,
+    unsyncFromCalendar: unsyncFromCalendar,
+    gcalConnected: !!gcalToken,
+    setFormState: setFormState,
+    onQuickEdit: editTask,
+    confirmingDelete: confirmingDelete,
+    setConfirmingDelete: setConfirmingDelete
+  }))));
+}
+const STATUS_FILTERS = [["todas", "Todas"], ["pendientes", "Pendientes"], ["cumplidas", "Cumplidas"], ["vencidas", "Vencidas"], ["canceladas", "Canceladas"]];
+const GROUP_OPTIONS = [["fecha", "Fecha"], ["categoria", "Categoría"], ["cliente", "Cliente"], ["urgencia", "Urgencia"]];
+const URGENCY_ORDER = ["alta", "media", "baja"];
+function TareasView({
+  tasks,
+  categories,
+  clients,
+  overrides,
+  today,
+  activeCategory,
+  activeClient,
+  catById,
+  clientById,
+  expanded,
+  setExpanded,
+  setStatus,
+  toggleSubtask,
+  toggleCTA,
+  deleteTask,
+  retrySync,
+  unsyncFromCalendar,
+  gcalConnected,
+  setFormState,
+  onQuickEdit,
+  confirmingDelete,
+  setConfirmingDelete
+}) {
+  const [statusFilter, setStatusFilter] = useState("pendientes");
+  const [groupBy, setGroupBy] = useState("fecha");
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState({});
+  const items = useMemo(() => {
+    const rangeStart = addDaysISO(today, -21);
+    const rangeEnd = addDaysISO(today, 45);
+    const all = [];
+    tasks.forEach(task => {
+      if (activeCategory && task.categoryId !== activeCategory) return;
+      if (activeClient && task.clientId !== activeClient) return;
+      occurrences(task, rangeStart, rangeEnd).forEach(date => {
+        const key = `${task.id}__${date}`;
+        const status = overrides[key] || "pending";
+        all.push({
+          key,
+          task,
+          date,
+          status
+        });
+      });
+    });
+    return all;
+  }, [tasks, overrides, activeCategory, activeClient, today]);
+  const filtered = useMemo(() => {
+    let out = items;
+    if (statusFilter === "pendientes") out = out.filter(i => i.status === "pending");else if (statusFilter === "cumplidas") out = out.filter(i => i.status === "done");else if (statusFilter === "vencidas") out = out.filter(i => i.status === "pending" && i.date < today);else if (statusFilter === "canceladas") out = out.filter(i => i.status === "cancelled");
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      out = out.filter(i => i.task.title.toLowerCase().includes(q));
+    }
+    return out;
+  }, [items, statusFilter, search, today]);
+  const groups = useMemo(() => {
+    const map = {};
+    const order = [];
+    filtered.forEach(it => {
+      let key, label, sortKey, color;
+      if (groupBy === "categoria") {
+        const c = catById[it.task.categoryId];
+        key = it.task.categoryId || "__sin__";
+        label = c ? c.name : "Sin categoría";
+        sortKey = label;
+        color = c && c.color;
+      } else if (groupBy === "cliente") {
+        const c = clientById[it.task.clientId];
+        key = it.task.clientId || "__sin__";
+        label = c ? c.name : "Sin cliente";
+        sortKey = label;
+        color = c && c.color;
+      } else if (groupBy === "urgencia") {
+        key = it.task.urgency || "media";
+        label = (URGENCY[key] || {}).label || "Media";
+        sortKey = String(URGENCY_ORDER.indexOf(key)).padStart(2, "0");
+      } else {
+        key = it.date;
+        label = dateLabel(it.date, today);
+        sortKey = it.date;
+      }
+      if (!map[key]) {
+        map[key] = {
+          key,
+          label,
+          sortKey,
+          color,
+          rows: []
+        };
+        order.push(key);
+      }
+      map[key].rows.push(it);
+    });
+    const list = Object.values(map);
+    list.sort((a, b) => a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0);
+    list.forEach(g => {
+      g.rows.sort((a, b) => {
+        if (groupBy !== "fecha" && a.date !== b.date) return a.date < b.date ? -1 : 1;
+        const ua = urgencyRank(a.task.urgency),
+          ub = urgencyRank(b.task.urgency);
+        if (ua !== ub) return ua - ub;
+        return a.task.title.localeCompare(b.task.title);
+      });
+    });
+    return list;
+  }, [filtered, groupBy, catById, clientById, today]);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: styles.metricsFilterRow
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 200
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: styles.formLabel
+  }, "Estado"), /*#__PURE__*/React.createElement("div", {
+    style: styles.chipRow
+  }, STATUS_FILTERS.map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setStatusFilter(key),
+    style: {
+      ...styles.chipBtn,
+      ...(statusFilter === key ? styles.chipBtnActive : {})
+    }
+  }, label)))), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Agrupar por"), /*#__PURE__*/React.createElement("select", {
+    value: groupBy,
+    onChange: e => setGroupBy(e.target.value),
+    style: styles.formSelect
+  }, GROUP_OPTIONS.map(([k, l]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, l)))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      ...styles.formField,
+      flex: 1,
+      minWidth: 180
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Buscar"), /*#__PURE__*/React.createElement("input", {
+    value: search,
+    onChange: e => setSearch(e.target.value),
+    placeholder: "Título de la tarea…",
+    style: styles.formSelect
+  }))), groups.length === 0 && /*#__PURE__*/React.createElement("div", {
     style: styles.empty
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 26,
@@ -1378,82 +1567,400 @@ function Plandia() {
       fontWeight: 500,
       color: "#2C1B45"
     }
-  }, view === "hoy" ? "Nada pendiente para hoy" : "No hay tareas acá"), /*#__PURE__*/React.createElement("p", {
+  }, "No hay tareas para estos filtros"), /*#__PURE__*/React.createElement("p", {
     style: {
       margin: "4px 0 0",
       fontSize: 13,
       color: "#8A8A93"
     }
-  }, "Sumá una tarea para empezar a ordenar el flujo.")), view !== "categoria" && groups.map(g => /*#__PURE__*/React.createElement("div", {
-    key: g.date,
+  }, "Sumá una tarea o probá cambiar el estado / búsqueda.")), groups.map(g => {
+    const isCollapsed = !!collapsed[g.key];
+    return /*#__PURE__*/React.createElement("div", {
+      key: g.key,
+      style: {
+        marginBottom: 18
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        ...styles.groupLabel,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        cursor: "pointer",
+        userSelect: "none"
+      },
+      onClick: () => setCollapsed(c => ({
+        ...c,
+        [g.key]: !c[g.key]
+      }))
+    }, /*#__PURE__*/React.createElement(Ic, {
+      size: 11,
+      style: {
+        opacity: 0.6
+      }
+    }, isCollapsed ? "▸" : "▾"), g.color && /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 8,
+        height: 8,
+        borderRadius: 2,
+        background: g.color
+      }
+    }), /*#__PURE__*/React.createElement("span", null, g.label), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        color: "#8A8A93",
+        textTransform: "none"
+      }
+    }, "(", g.rows.length, ")")), !isCollapsed && g.rows.map(it => /*#__PURE__*/React.createElement(TaskRow, {
+      key: it.key,
+      it: it,
+      cat: catById[it.task.categoryId],
+      client: clientById[it.task.clientId],
+      categories: categories,
+      clients: clients,
+      onQuickEdit: onQuickEdit,
+      expanded: expanded,
+      setExpanded: setExpanded,
+      setStatus: setStatus,
+      toggleSubtask: toggleSubtask,
+      toggleCTA: toggleCTA,
+      deleteTask: deleteTask,
+      retrySync: retrySync,
+      unsyncFromCalendar: unsyncFromCalendar,
+      gcalConnected: gcalConnected,
+      setFormState: setFormState,
+      confirmingDelete: confirmingDelete,
+      setConfirmingDelete: setConfirmingDelete,
+      showDate: groupBy !== "fecha",
+      today: today
+    })));
+  }));
+}
+function KanbanCard({
+  it,
+  cat,
+  client,
+  categories,
+  clients,
+  onQuickEdit,
+  onDragStart
+}) {
+  const urg = URGENCY[it.task.urgency];
+  const overdue = it.status === "pending" && it.date < it.__today;
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(it.task.title);
+  const [editingDate, setEditingDate] = useState(false);
+  const syncFlag = !!(it.task.gcal && it.task.gcal.eventId);
+  const quickEdit = patch => onQuickEdit && onQuickEdit(it.task.id, patch, syncFlag);
+  const saveTitle = () => {
+    const v = titleDraft.trim();
+    setEditingTitle(false);
+    if (v && v !== it.task.title) quickEdit({
+      title: v
+    });else setTitleDraft(it.task.title);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    draggable: !editingTitle && !editingDate,
+    onDragStart: e => {
+      e.dataTransfer.setData("text/plain", it.key);
+      onDragStart && onDragStart();
+    },
     style: {
-      marginBottom: 18
+      background: "#fff",
+      border: `1px solid ${LINE}`,
+      borderLeft: `3px solid ${cat ? cat.color : LINE}`,
+      borderRadius: 8,
+      padding: "9px 10px",
+      marginBottom: 8,
+      cursor: "grab",
+      boxShadow: "0 1px 2px rgba(44,27,69,0.06)"
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: styles.groupLabel
-  }, g.label), g.rows.map(it => /*#__PURE__*/React.createElement(TaskRow, {
-    key: it.key,
-    it: it,
-    cat: catById[it.task.categoryId],
-    client: clientById[it.task.clientId],
-    expanded: expanded,
-    setExpanded: setExpanded,
-    setStatus: setStatus,
-    toggleSubtask: toggleSubtask,
-    toggleCTA: toggleCTA,
-    deleteTask: deleteTask,
-    retrySync: retrySync,
-    unsyncFromCalendar: unsyncFromCalendar,
-    gcalConnected: !!gcalToken,
-    setFormState: setFormState,
-    confirmingDelete: confirmingDelete,
-    setConfirmingDelete: setConfirmingDelete,
-    showDate: false,
-    today: today
-  })))), view === "categoria" && categoryGroups.map(cg => /*#__PURE__*/React.createElement("div", {
-    key: cg.category.id,
+  }, editingTitle ? /*#__PURE__*/React.createElement("input", {
+    autoFocus: true,
+    value: titleDraft,
+    onChange: e => setTitleDraft(e.target.value),
+    onBlur: saveTitle,
+    onKeyDown: e => {
+      if (e.key === "Enter") saveTitle();
+      if (e.key === "Escape") {
+        setTitleDraft(it.task.title);
+        setEditingTitle(false);
+      }
+    },
     style: {
-      marginBottom: 18
+      fontSize: 13,
+      fontWeight: 500,
+      border: `1px solid ${ACCENT}`,
+      borderRadius: 5,
+      padding: "2px 5px",
+      width: "100%",
+      outline: "none",
+      marginBottom: 4
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }) : /*#__PURE__*/React.createElement("div", {
+    onDoubleClick: () => setEditingTitle(true),
+    title: "Doble clic para renombrar",
     style: {
-      ...styles.groupLabel,
       display: "flex",
       alignItems: "center",
-      gap: 6
+      gap: 6,
+      fontSize: 13,
+      fontWeight: 500,
+      color: "#2C1B45",
+      marginBottom: 4,
+      cursor: "text"
+    }
+  }, urg && /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: "50%",
+      background: urg.color,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, it.task.title)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 11,
+      color: "#8A8A93",
+      flexWrap: "wrap"
+    }
+  }, categories && /*#__PURE__*/React.createElement("select", {
+    value: it.task.categoryId || "",
+    onChange: e => quickEdit({
+      categoryId: e.target.value
+    }),
+    style: {
+      ...styles.inlineSelect,
+      color: cat ? cat.color : "#8A8A93",
+      fontWeight: 600
+    }
+  }, categories.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.name))), clients && /*#__PURE__*/React.createElement("select", {
+    value: it.task.clientId || "",
+    onChange: e => quickEdit({
+      clientId: e.target.value || null
+    }),
+    style: styles.inlineSelect
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Sin cliente"), clients.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.name))), editingDate ? /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    autoFocus: true,
+    value: it.task.startDate,
+    onChange: e => {
+      quickEdit({
+        startDate: e.target.value
+      });
+      setEditingDate(false);
+    },
+    onBlur: () => setEditingDate(false),
+    style: {
+      fontSize: 11,
+      border: `1px solid ${ACCENT}`,
+      borderRadius: 5,
+      padding: "1px 4px"
+    }
+  }) : /*#__PURE__*/React.createElement("span", {
+    onClick: () => setEditingDate(true),
+    title: "Clic para cambiar la fecha",
+    style: overdue ? {
+      color: "#C1442D",
+      fontWeight: 600,
+      cursor: "pointer",
+      textDecoration: "underline dotted"
+    } : {
+      cursor: "pointer",
+      textDecoration: "underline dotted"
+    }
+  }, fmtShort(it.date))));
+}
+function KanbanColumn({
+  title,
+  color,
+  items,
+  catById,
+  clientById,
+  categories,
+  clients,
+  onQuickEdit,
+  onDropStatus,
+  targetStatus
+}) {
+  const [over, setOver] = useState(false);
+  return /*#__PURE__*/React.createElement("div", {
+    onDragOver: e => {
+      e.preventDefault();
+      setOver(true);
+    },
+    onDragLeave: () => setOver(false),
+    onDrop: e => {
+      e.preventDefault();
+      setOver(false);
+      const key = e.dataTransfer.getData("text/plain");
+      if (key) onDropStatus(key, targetStatus);
+    },
+    style: {
+      flex: 1,
+      minWidth: 240,
+      background: over ? "#F3E9F1" : "#F4F3F0",
+      border: `1px dashed ${over ? "#8B4F82" : LINE}`,
+      borderRadius: 10,
+      padding: 12,
+      minHeight: 200
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      marginBottom: 10,
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: "#2C1B45"
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
       width: 8,
       height: 8,
-      borderRadius: 2,
-      background: cg.category.color
+      borderRadius: "50%",
+      background: color
     }
-  }), cg.category.name), cg.rows.map(it => /*#__PURE__*/React.createElement(TaskRow, {
+  }), title, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 400,
+      color: "#8A8A93"
+    }
+  }, "(", items.length, ")")), items.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#8A8A93",
+      padding: "6px 0"
+    }
+  }, "Arrastrá una tarjeta acá"), items.map(it => /*#__PURE__*/React.createElement(KanbanCard, {
     key: it.key,
-    it: it,
-    cat: cg.category,
+    it: {
+      ...it,
+      __today: it.__today
+    },
+    cat: catById[it.task.categoryId],
     client: clientById[it.task.clientId],
-    expanded: expanded,
-    setExpanded: setExpanded,
-    setStatus: setStatus,
-    toggleSubtask: toggleSubtask,
-    toggleCTA: toggleCTA,
-    deleteTask: deleteTask,
-    retrySync: retrySync,
-    unsyncFromCalendar: unsyncFromCalendar,
-    gcalConnected: !!gcalToken,
-    setFormState: setFormState,
-    confirmingDelete: confirmingDelete,
-    setConfirmingDelete: setConfirmingDelete,
-    showDate: true,
-    today: today
-  }))))))));
+    categories: categories,
+    clients: clients,
+    onQuickEdit: onQuickEdit
+  })));
 }
+function TableroView({
+  tasks,
+  categories,
+  clients,
+  overrides,
+  today,
+  activeCategory,
+  activeClient,
+  catById,
+  clientById,
+  setStatus,
+  onQuickEdit
+}) {
+  const items = useMemo(() => {
+    const rangeStart = addDaysISO(today, -7);
+    const rangeEnd = addDaysISO(today, 30);
+    const all = [];
+    tasks.forEach(task => {
+      if (activeCategory && task.categoryId !== activeCategory) return;
+      if (activeClient && task.clientId !== activeClient) return;
+      occurrences(task, rangeStart, rangeEnd).forEach(date => {
+        const key = `${task.id}__${date}`;
+        const status = overrides[key] || "pending";
+        all.push({
+          key,
+          task,
+          date,
+          status,
+          __today: today
+        });
+      });
+    });
+    all.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    return all;
+  }, [tasks, overrides, activeCategory, activeClient, today]);
+  const pending = items.filter(i => i.status === "pending");
+  const done = items.filter(i => i.status === "done");
+  const cancelled = items.filter(i => i.status === "cancelled");
+  const handleDrop = (key, targetStatus) => {
+    const it = items.find(i => i.key === key);
+    if (!it) return;
+    if (it.status === targetStatus) return;
+    setStatus(key, targetStatus);
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: "#8A8A93",
+      margin: "0 0 14px"
+    }
+  }, "Arrastrá una tarjeta entre columnas para cambiar su estado, o tocá los campos de cada tarjeta para editarla al toque. Muestra los próximos 30 días y la última semana."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 14,
+      alignItems: "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement(KanbanColumn, {
+    title: "Pendiente",
+    color: "#C98A2A",
+    items: pending,
+    catById: catById,
+    clientById: clientById,
+    categories: categories,
+    clients: clients,
+    onQuickEdit: onQuickEdit,
+    onDropStatus: handleDrop,
+    targetStatus: "pending"
+  }), /*#__PURE__*/React.createElement(KanbanColumn, {
+    title: "Hecho",
+    color: "#5A7A55",
+    items: done,
+    catById: catById,
+    clientById: clientById,
+    categories: categories,
+    clients: clients,
+    onQuickEdit: onQuickEdit,
+    onDropStatus: handleDrop,
+    targetStatus: "done"
+  }), /*#__PURE__*/React.createElement(KanbanColumn, {
+    title: "Cancelada",
+    color: "#8A8A93",
+    items: cancelled,
+    catById: catById,
+    clientById: clientById,
+    categories: categories,
+    clients: clients,
+    onQuickEdit: onQuickEdit,
+    onDropStatus: handleDrop,
+    targetStatus: "cancelled"
+  })));
+}
+const URGENCY_OPTIONS = [["alta", "Alta"], ["media", "Media"], ["baja", "Baja"]];
 function TaskRow({
   it,
   cat,
   client,
+  categories,
+  clients,
   expanded,
   setExpanded,
   setStatus,
@@ -1466,6 +1973,7 @@ function TaskRow({
   setFormState,
   confirmingDelete,
   setConfirmingDelete,
+  onQuickEdit,
   showDate,
   today
 }) {
@@ -1479,6 +1987,18 @@ function TaskRow({
   const hasExtras = subtasks.length > 0 || it.task.cta;
   const urg = URGENCY[it.task.urgency];
   const promisedLate = it.task.promisedDate && it.task.promisedDate < today && !done;
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(it.task.title);
+  const [editingDate, setEditingDate] = useState(false);
+  const syncFlag = !!(it.task.gcal && it.task.gcal.eventId);
+  const quickEdit = patch => onQuickEdit && onQuickEdit(it.task.id, patch, syncFlag);
+  const saveTitle = () => {
+    const v = titleDraft.trim();
+    setEditingTitle(false);
+    if (v && v !== it.task.title) quickEdit({
+      title: v
+    });else setTitleDraft(it.task.title);
+  };
   return /*#__PURE__*/React.createElement("div", {
     style: styles.rowWrap
   }, /*#__PURE__*/React.createElement("div", {
@@ -1502,12 +2022,38 @@ function TaskRow({
     style: {
       flex: 1,
       minWidth: 0
+    }
+  }, editingTitle ? /*#__PURE__*/React.createElement("input", {
+    autoFocus: true,
+    value: titleDraft,
+    onChange: e => setTitleDraft(e.target.value),
+    onBlur: saveTitle,
+    onKeyDown: e => {
+      if (e.key === "Enter") saveTitle();
+      if (e.key === "Escape") {
+        setTitleDraft(it.task.title);
+        setEditingTitle(false);
+      }
     },
+    style: {
+      fontSize: 14,
+      fontWeight: 500,
+      border: `1px solid ${ACCENT}`,
+      borderRadius: 5,
+      padding: "2px 6px",
+      width: "100%",
+      outline: "none"
+    }
+  }) : /*#__PURE__*/React.createElement("div", {
     onClick: () => hasExtras && setExpanded(e => ({
       ...e,
       [it.key]: !e[it.key]
-    }))
-  }, /*#__PURE__*/React.createElement("div", {
+    })),
+    onDoubleClick: e => {
+      e.stopPropagation();
+      setEditingTitle(true);
+    },
+    title: "Doble clic para renombrar",
     style: {
       fontSize: 14,
       fontWeight: 500,
@@ -1516,7 +2062,7 @@ function TaskRow({
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
-      cursor: hasExtras ? "pointer" : "default",
+      cursor: hasExtras ? "pointer" : "text",
       display: "flex",
       alignItems: "center",
       gap: 6
@@ -1537,28 +2083,75 @@ function TaskRow({
     }
   }), it.task.title), /*#__PURE__*/React.createElement("div", {
     style: styles.metaRow
-  }, cat && !showDate && /*#__PURE__*/React.createElement("span", {
+  }, categories && /*#__PURE__*/React.createElement("select", {
+    value: it.task.categoryId || "",
+    onChange: e => quickEdit({
+      categoryId: e.target.value
+    }),
+    onClick: e => e.stopPropagation(),
     style: {
-      color: cat.color,
-      fontSize: 13,
+      ...styles.inlineSelect,
+      color: cat ? cat.color : "#4C475A",
       fontWeight: 600
     }
-  }, cat.name), client && /*#__PURE__*/React.createElement("span", {
-    style: styles.clientChip
-  }, /*#__PURE__*/React.createElement("span", {
+  }, categories.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.name))), clients && /*#__PURE__*/React.createElement("select", {
+    value: it.task.clientId || "",
+    onChange: e => quickEdit({
+      clientId: e.target.value || null
+    }),
+    onClick: e => e.stopPropagation(),
+    style: styles.inlineSelect
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Sin cliente"), clients.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.name))), /*#__PURE__*/React.createElement("select", {
+    value: it.task.urgency || "media",
+    onChange: e => quickEdit({
+      urgency: e.target.value
+    }),
+    onClick: e => e.stopPropagation(),
     style: {
-      width: 6,
-      height: 6,
-      borderRadius: "50%",
-      background: client.color,
-      display: "inline-block"
+      ...styles.inlineSelect,
+      color: urg ? urg.color : "#4C475A",
+      fontWeight: 600
     }
-  }), " ", client.name), showDate && /*#__PURE__*/React.createElement("span", null, dateLabel(it.date, today)), urg && /*#__PURE__*/React.createElement("span", {
+  }, URGENCY_OPTIONS.map(([k, l]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, l))), editingDate ? /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    autoFocus: true,
+    value: it.task.startDate,
+    onClick: e => e.stopPropagation(),
+    onChange: e => {
+      quickEdit({
+        startDate: e.target.value
+      });
+      setEditingDate(false);
+    },
+    onBlur: () => setEditingDate(false),
     style: {
-      color: urg.color,
-      fontWeight: 500
+      fontSize: 11.5,
+      border: `1px solid ${ACCENT}`,
+      borderRadius: 5,
+      padding: "1px 4px"
     }
-  }, urg.label), recLabel && /*#__PURE__*/React.createElement("span", {
+  }) : /*#__PURE__*/React.createElement("span", {
+    onClick: e => {
+      e.stopPropagation();
+      setEditingDate(true);
+    },
+    title: "Clic para cambiar la fecha",
+    style: {
+      cursor: "pointer",
+      textDecoration: "underline dotted"
+    }
+  }, showDate ? dateLabel(it.date, today) : fmtShort(it.task.startDate)), recLabel && /*#__PURE__*/React.createElement("span", {
     style: styles.recBadge
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 11
@@ -1601,7 +2194,7 @@ function TaskRow({
         task: it.task
       });
     },
-    title: "Editar tarea",
+    title: "Editar tarea (formulario completo)",
     style: styles.iconBtn
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 12
@@ -1686,773 +2279,6 @@ function TaskRow({
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 13
   }, "📞"), " ", it.task.cta.done ? `${it.task.cta.label} · hecho` : it.task.cta.label)));
-}
-const PIE_PALETTE = ["#8B4F82", "#33566B", "#C98A2A", "#5A7A55", "#B0503A", "#6E4C77", "#4F6B52", "#8A8A93", "#B27CA8", "#7A3B45"];
-function hexToRgb(hex) {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
-  return m ? {
-    r: parseInt(m[1], 16),
-    g: parseInt(m[2], 16),
-    b: parseInt(m[3], 16)
-  } : {
-    r: 139,
-    g: 79,
-    b: 130
-  };
-}
-function PctBarList({
-  items,
-  total
-}) {
-  if (!items.length) return /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: "#8A8A93",
-      padding: "10px 0"
-    }
-  }, "Sin datos en este período.");
-  return /*#__PURE__*/React.createElement("div", null, items.map((it, i) => {
-    const pct = total > 0 ? Math.round(it.count / total * 100) : 0;
-    const color = it.color || PIE_PALETTE[i % PIE_PALETTE.length];
-    return /*#__PURE__*/React.createElement("div", {
-      key: it.name + i,
-      style: {
-        marginBottom: 10
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        justifyContent: "space-between",
-        fontSize: 12.5,
-        marginBottom: 3
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        fontWeight: 500,
-        color: "#3A2E4E"
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        width: 8,
-        height: 8,
-        borderRadius: "50%",
-        background: color,
-        flexShrink: 0
-      }
-    }), it.name), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontWeight: 700,
-        color: "#2C1B45"
-      }
-    }, pct, "% ", /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontWeight: 400,
-        color: "#8A8A93"
-      }
-    }, "(", it.count, ")"))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        height: 7,
-        borderRadius: 4,
-        background: "#ECEBE6",
-        overflow: "hidden"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        height: "100%",
-        width: `${pct}%`,
-        background: color,
-        borderRadius: 4
-      }
-    })));
-  }));
-}
-function MetricsPanel({
-  categories,
-  clients,
-  tasks,
-  overrides,
-  today
-}) {
-  const [catFilter, setCatFilter] = useState("");
-  const [clientFilter, setClientFilter] = useState("");
-  const [dateFrom, setDateFrom] = useState(firstDayOfMonthISO(today));
-  const [dateTo, setDateTo] = useState(today);
-  const pieCatRef = useRef(null);
-  const pieCatChart = useRef(null);
-  const pieClientRef = useRef(null);
-  const pieClientChart = useRef(null);
-  const [chartsReady, setChartsReady] = useState(typeof Chart !== "undefined");
-  useEffect(() => {
-    if (chartsReady) return;
-    const t = setInterval(() => {
-      if (typeof Chart !== "undefined") {
-        setChartsReady(true);
-        clearInterval(t);
-      }
-    }, 300);
-    return () => clearInterval(t);
-  }, [chartsReady]);
-  const rangeStart = dateFrom || "0000-01-01";
-  const rangeEnd = dateTo || "9999-12-31";
-  const rows = useMemo(() => {
-    const byCat = {};
-    categories.forEach(c => {
-      if (catFilter && c.id !== catFilter) return;
-      byCat[c.id] = {
-        category: c,
-        done: 0,
-        pending: 0,
-        cancelled: 0,
-        overdue: 0,
-        total: 0
-      };
-    });
-    tasks.forEach(task => {
-      if (catFilter && task.categoryId !== catFilter) return;
-      if (clientFilter && task.clientId !== clientFilter) return;
-      const stat = byCat[task.categoryId];
-      if (!stat) return;
-      occurrences(task, rangeStart, rangeEnd).forEach(date => {
-        const key = `${task.id}__${date}`;
-        const status = overrides[key] || "pending";
-        stat.total++;
-        if (status === "done") stat.done++;else if (status === "cancelled") stat.cancelled++;else {
-          stat.pending++;
-          if (date < today) stat.overdue++;
-        }
-      });
-    });
-    return Object.values(byCat).filter(s => s.total > 0);
-  }, [categories, tasks, overrides, catFilter, clientFilter, rangeStart, rangeEnd, today]);
-  const totals = rows.reduce((acc, d) => {
-    acc.total += d.total;
-    acc.done += d.done;
-    acc.pending += d.pending;
-    acc.cancelled += d.cancelled;
-    acc.overdue += d.overdue;
-    return acc;
-  }, {
-    total: 0,
-    done: 0,
-    pending: 0,
-    cancelled: 0,
-    overdue: 0
-  });
-
-  // % por categoría: respeta fecha + cliente elegido (no se autofiltra por categoría)
-  const catDist = useMemo(() => {
-    const byCat = {};
-    categories.forEach(c => {
-      byCat[c.id] = {
-        name: c.name,
-        color: c.color,
-        count: 0
-      };
-    });
-    tasks.forEach(task => {
-      if (clientFilter && task.clientId !== clientFilter) return;
-      const stat = byCat[task.categoryId];
-      if (!stat) return;
-      stat.count += occurrences(task, rangeStart, rangeEnd).length;
-    });
-    const items = Object.values(byCat).filter(c => c.count > 0).sort((a, b) => b.count - a.count);
-    const total = items.reduce((s, c) => s + c.count, 0);
-    return {
-      items,
-      total
-    };
-  }, [categories, tasks, rangeStart, rangeEnd, clientFilter]);
-
-  // % por cliente: respeta fecha + categoría elegida (no se autofiltra por cliente)
-  const clientDist = useMemo(() => {
-    const byClient = {};
-    clients.forEach((c, i) => {
-      byClient[c.id] = {
-        name: c.name,
-        color: c.color || PIE_PALETTE[i % PIE_PALETTE.length],
-        count: 0
-      };
-    });
-    let sinCliente = 0;
-    tasks.forEach(task => {
-      if (catFilter && task.categoryId !== catFilter) return;
-      const n = occurrences(task, rangeStart, rangeEnd).length;
-      if (!n) return;
-      if (task.clientId && byClient[task.clientId]) byClient[task.clientId].count += n;else sinCliente += n;
-    });
-    const items = Object.values(byClient).filter(c => c.count > 0).sort((a, b) => b.count - a.count);
-    if (sinCliente > 0) items.push({
-      name: "Sin cliente",
-      color: "#C7C4B3",
-      count: sinCliente
-    });
-    const total = items.reduce((s, c) => s + c.count, 0);
-    return {
-      items,
-      total
-    };
-  }, [clients, tasks, rangeStart, rangeEnd, catFilter]);
-  const makePie = (ref, instRef, dist) => {
-    if (!ref.current || typeof Chart === "undefined") return;
-    if (instRef.current) instRef.current.destroy();
-    if (dist.items.length === 0) return;
-    instRef.current = new Chart(ref.current, {
-      type: "doughnut",
-      data: {
-        labels: dist.items.map(i => i.name),
-        datasets: [{
-          data: dist.items.map(i => i.count),
-          backgroundColor: dist.items.map((i, idx) => i.color || PIE_PALETTE[idx % PIE_PALETTE.length])
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: {
-            display: false
-          },
-          tooltip: {
-            callbacks: {
-              label: ctx => `${ctx.label}: ${Math.round(ctx.parsed / dist.total * 100)}% (${ctx.parsed})`
-            }
-          }
-        }
-      }
-    });
-  };
-  useEffect(() => {
-    makePie(pieCatRef, pieCatChart, catDist);
-  }, [catDist, chartsReady]);
-  useEffect(() => {
-    makePie(pieClientRef, pieClientChart, clientDist);
-  }, [clientDist, chartsReady]);
-  const exportPDF = () => {
-    if (!window.jspdf) {
-      alert("La librería de PDF todavía está cargando, esperá un segundo y probá de nuevo.");
-      return;
-    }
-    const {
-      jsPDF
-    } = window.jspdf;
-    const doc = new jsPDF({
-      unit: "pt",
-      format: "a4"
-    });
-    const pageW = doc.internal.pageSize.getWidth();
-    const catName = catFilter ? (categories.find(c => c.id === catFilter) || {}).name || "—" : "Todas";
-    const clientName = clientFilter ? (clients.find(c => c.id === clientFilter) || {}).name || "—" : "Todos";
-    doc.setFillColor(44, 27, 69);
-    doc.rect(0, 0, pageW, 70, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.text("Reporte de métricas · Bitácora", 40, 32);
-    doc.setFontSize(9.5);
-    doc.setTextColor(220, 210, 225);
-    doc.text(`Generado el ${new Date().toLocaleDateString("es-AR")}  ·  Categoría: ${catName}  ·  Cliente: ${clientName}  ·  Período: ${dateFrom || "sin límite"} a ${dateTo || "sin límite"}`, 40, 52);
-    let y = 96;
-    doc.setTextColor(44, 27, 69);
-    doc.setFontSize(12.5);
-    doc.text(`Total: ${totals.total}    Cumplidas: ${totals.done}    Pendientes: ${totals.pending}    Vencidas: ${totals.overdue}    Canceladas: ${totals.cancelled}`, 40, y);
-    y += 24;
-    const drawDistTable = (title, dist, startY) => {
-      doc.setFontSize(12);
-      doc.setTextColor(44, 27, 69);
-      doc.text(title, 40, startY);
-      let yy = startY + 14;
-      doc.setFontSize(9.5);
-      const barX = 220,
-        barW = 200,
-        barH = 8;
-      dist.items.forEach((it, idx) => {
-        const pct = dist.total > 0 ? Math.round(it.count / dist.total * 100) : 0;
-        const color = it.color || PIE_PALETTE[idx % PIE_PALETTE.length];
-        const rgb = hexToRgb(color);
-        doc.setTextColor(60, 55, 70);
-        doc.text(`${it.name}`, 40, yy + 6);
-        doc.setFillColor(230, 228, 222);
-        doc.rect(barX, yy, barW, barH, "F");
-        doc.setFillColor(rgb.r, rgb.g, rgb.b);
-        doc.rect(barX, yy, barW * pct / 100, barH, "F");
-        doc.setTextColor(44, 27, 69);
-        doc.text(`${pct}% (${it.count})`, barX + barW + 10, yy + 7);
-        yy += barH + 10;
-      });
-      return yy + 10;
-    };
-    y = drawDistTable("% por categoría", catDist, y);
-    y = drawDistTable("% por cliente", clientDist, y + 6);
-    try {
-      if (pieCatChart.current && pieClientChart.current) {
-        const imgW = (pageW - 80 - 20) / 2;
-        doc.addImage(pieCatChart.current.toBase64Image(), "PNG", 40, y, imgW, 150);
-        doc.addImage(pieClientChart.current.toBase64Image(), "PNG", 40 + imgW + 20, y, imgW, 150);
-        y += 166;
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    const body = rows.map(r => {
-      const pct = r.total > 0 ? Math.round(r.done / r.total * 100) : 0;
-      return [r.category.name, String(r.total), String(r.done), String(r.pending), String(r.overdue), String(r.cancelled), `${pct}%`];
-    });
-    if (doc.autoTable) {
-      doc.autoTable({
-        startY: y,
-        head: [["Categoría", "Total", "Cumplidas", "Pendientes", "Vencidas", "Canceladas", "% cumplido"]],
-        body,
-        headStyles: {
-          fillColor: [44, 27, 69],
-          textColor: 255,
-          fontSize: 9.5
-        },
-        bodyStyles: {
-          fontSize: 9.5
-        },
-        alternateRowStyles: {
-          fillColor: [244, 243, 240]
-        },
-        margin: {
-          left: 40,
-          right: 40
-        }
-      });
-    }
-    doc.save(`bitacora-metricas-${today}.pdf`);
-  };
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: styles.metricsFilterRow
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      minWidth: 160
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: styles.formLabel
-  }, "Categoría"), /*#__PURE__*/React.createElement("div", {
-    style: styles.chipRow
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setCatFilter(""),
-    style: {
-      ...styles.chipBtn,
-      ...(catFilter === "" ? styles.chipBtnActive : {})
-    }
-  }, "Todas"), categories.map(c => /*#__PURE__*/React.createElement("button", {
-    key: c.id,
-    onClick: () => setCatFilter(c.id),
-    style: {
-      ...styles.chipBtn,
-      ...(catFilter === c.id ? {
-        ...styles.chipBtnActive,
-        background: c.color,
-        borderColor: c.color
-      } : {})
-    }
-  }, c.name)))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      minWidth: 220,
-      flex: 1
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: styles.formLabel
-  }, "Cliente"), /*#__PURE__*/React.createElement("div", {
-    style: styles.chipRow
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setClientFilter(""),
-    style: {
-      ...styles.chipBtn,
-      ...(clientFilter === "" ? styles.chipBtnActive : {})
-    }
-  }, "Todos"), clients.map((c, i) => /*#__PURE__*/React.createElement("button", {
-    key: c.id,
-    onClick: () => setClientFilter(c.id),
-    style: {
-      ...styles.chipBtn,
-      ...(clientFilter === c.id ? {
-        ...styles.chipBtnActive,
-        background: c.color || PIE_PALETTE[i % PIE_PALETTE.length],
-        borderColor: c.color || PIE_PALETTE[i % PIE_PALETTE.length]
-      } : {})
-    }
-  }, c.name)))), /*#__PURE__*/React.createElement("label", {
-    style: styles.formField
-  }, /*#__PURE__*/React.createElement("span", {
-    style: styles.formLabel
-  }, "Desde"), /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: dateFrom,
-    onChange: e => setDateFrom(e.target.value),
-    style: styles.formSelect
-  })), /*#__PURE__*/React.createElement("label", {
-    style: styles.formField
-  }, /*#__PURE__*/React.createElement("span", {
-    style: styles.formLabel
-  }, "Hasta"), /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: dateTo,
-    onChange: e => setDateTo(e.target.value),
-    style: styles.formSelect
-  })), /*#__PURE__*/React.createElement("button", {
-    style: styles.formSave,
-    onClick: exportPDF,
-    disabled: rows.length === 0
-  }, "⬇ Exportar PDF")), rows.length === 0 && catDist.items.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: styles.empty
-  }, /*#__PURE__*/React.createElement(Ic, {
-    size: 26,
-    style: {
-      opacity: 0.4,
-      marginBottom: 10
-    }
-  }, "📊"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      margin: 0,
-      fontWeight: 500,
-      color: "#2C1B45"
-    }
-  }, "No hay datos para estos filtros")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    style: styles.kpiSummaryRow
-  }, /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Total",
-    value: totals.total,
-    color: "#2C1B45"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Cumplidas",
-    value: totals.done,
-    color: "#5A7A55"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Pendientes",
-    value: totals.pending,
-    color: "#C98A2A"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Vencidas",
-    value: totals.overdue,
-    color: "#C1442D"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Canceladas",
-    value: totals.cancelled,
-    color: "#8A8A93"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "grid",
-      gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-      gap: 14,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: "#fff",
-      border: `1px solid ${LINE}`,
-      borderRadius: 10,
-      padding: 16,
-      display: "flex",
-      flexDirection: "column",
-      maxHeight: 460,
-      minWidth: 0,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      color: "#2C1B45",
-      marginBottom: 10
-    }
-  }, "% por categoría", clientFilter ? ` — ${(clients.find(c => c.id === clientFilter) || {}).name || ""}` : ""), chartsReady && catDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      height: 150,
-      marginBottom: 12,
-      flexShrink: 0,
-      position: "relative",
-      width: "100%"
-    }
-  }, /*#__PURE__*/React.createElement("canvas", {
-    ref: pieCatRef
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      overflowY: "auto",
-      flex: 1
-    }
-  }, /*#__PURE__*/React.createElement(PctBarList, {
-    items: catDist.items,
-    total: catDist.total
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: "#fff",
-      border: `1px solid ${LINE}`,
-      borderRadius: 10,
-      padding: 16,
-      display: "flex",
-      flexDirection: "column",
-      maxHeight: 460,
-      minWidth: 0,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      color: "#2C1B45",
-      marginBottom: 10
-    }
-  }, "% por cliente", catFilter ? ` — ${(categories.find(c => c.id === catFilter) || {}).name || ""}` : ""), chartsReady && clientDist.items.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      height: 150,
-      marginBottom: 12,
-      flexShrink: 0,
-      position: "relative",
-      width: "100%"
-    }
-  }, /*#__PURE__*/React.createElement("canvas", {
-    ref: pieClientRef
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      overflowY: "auto",
-      flex: 1
-    }
-  }, /*#__PURE__*/React.createElement(PctBarList, {
-    items: clientDist.items,
-    total: clientDist.total
-  })))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      color: "#2C1B45",
-      margin: "4px 0 10px"
-    }
-  }, "Detalle por categoría (según filtros de arriba)"), /*#__PURE__*/React.createElement("div", null, rows.map(d => {
-    const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
-    return /*#__PURE__*/React.createElement("div", {
-      key: d.category.id,
-      style: styles.kpiCatCard
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        marginBottom: 8
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        width: 9,
-        height: 9,
-        borderRadius: 2,
-        background: d.category.color,
-        flexShrink: 0
-      }
-    }), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontWeight: 600,
-        fontSize: 14,
-        flex: 1
-      }
-    }, d.category.name), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        color: "#8A8A93"
-      }
-    }, pct, "% cumplido")), /*#__PURE__*/React.createElement("div", {
-      style: styles.kpiBarTrack
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        ...styles.kpiBarFill,
-        width: `${pct}%`
-      }
-    })), /*#__PURE__*/React.createElement("div", {
-      style: styles.kpiCatStats
-    }, /*#__PURE__*/React.createElement("span", null, d.total, " en total"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#5A7A55"
-      }
-    }, d.done, " cumplidas"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#C98A2A"
-      }
-    }, d.pending, " pendientes"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#C1442D"
-      }
-    }, d.overdue, " vencidas"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#8A8A93"
-      }
-    }, d.cancelled, " canceladas")));
-  }))));
-}
-function KpiPanel({
-  data,
-  scope,
-  setScope,
-  untilToday,
-  setUntilToday
-}) {
-  const totals = data.reduce((acc, d) => {
-    acc.total += d.total;
-    acc.done += d.done;
-    acc.pending += d.pending;
-    acc.cancelled += d.cancelled;
-    acc.overdue += d.overdue;
-    acc.taskCount += d.taskCount;
-    acc.rescheduledCount += d.rescheduledCount;
-    return acc;
-  }, {
-    total: 0,
-    done: 0,
-    pending: 0,
-    cancelled: 0,
-    overdue: 0,
-    taskCount: 0,
-    rescheduledCount: 0
-  });
-  const totalRescheduledPct = totals.taskCount > 0 ? Math.round(totals.rescheduledCount / totals.taskCount * 100) : 0;
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: styles.kpiScopeRow
-  }, [["todo", "Todo el historial"], ["mes", "Este mes"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
-    key: key,
-    onClick: () => setScope(key),
-    style: {
-      ...styles.kpiScopeBtn,
-      ...(scope === key ? styles.kpiScopeBtnActive : {})
-    }
-  }, label)), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setUntilToday(v => !v),
-    style: {
-      ...styles.kpiScopeBtn,
-      ...(untilToday ? styles.kpiScopeBtnActive : {})
-    },
-    title: "No contar ocurrencias futuras que todavía no llegaron"
-  }, "Hasta hoy inclusive")), data.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: styles.empty
-  }, /*#__PURE__*/React.createElement(Ic, {
-    size: 26,
-    style: {
-      opacity: 0.4,
-      marginBottom: 10
-    }
-  }, "📊"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      margin: 0,
-      fontWeight: 500,
-      color: "#2C1B45"
-    }
-  }, "Todavía no hay datos para este período")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    style: styles.kpiSummaryRow
-  }, /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Total",
-    value: totals.total,
-    color: "#2C1B45"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Cumplidas",
-    value: totals.done,
-    color: "#5A7A55"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Pendientes",
-    value: totals.pending,
-    color: "#C98A2A"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Vencidas",
-    value: totals.overdue,
-    color: "#C1442D"
-  }), /*#__PURE__*/React.createElement(KpiStat, {
-    label: "Canceladas",
-    value: totals.cancelled,
-    color: "#8A8A93"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: styles.kpiRescheduleLine
-  }, /*#__PURE__*/React.createElement(Ic, {
-    size: 12
-  }, "↻"), " ", totalRescheduledPct, "% de las tareas fueron modificadas (cambio de fecha) — ", totals.rescheduledCount, "/", totals.taskCount, " tareas. No afecta el % de cumplimiento."), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 6
-    }
-  }, data.map(d => {
-    const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
-    return /*#__PURE__*/React.createElement("div", {
-      key: d.category.id,
-      style: styles.kpiCatCard
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        marginBottom: 8
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        width: 9,
-        height: 9,
-        borderRadius: 2,
-        background: d.category.color,
-        flexShrink: 0
-      }
-    }), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontWeight: 600,
-        fontSize: 14,
-        flex: 1
-      }
-    }, d.category.name), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        color: "#8A8A93"
-      }
-    }, pct, "% cumplido")), /*#__PURE__*/React.createElement("div", {
-      style: styles.kpiBarTrack
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        ...styles.kpiBarFill,
-        width: `${pct}%`
-      }
-    })), /*#__PURE__*/React.createElement("div", {
-      style: styles.kpiCatStats
-    }, /*#__PURE__*/React.createElement("span", null, d.total, " en total"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#5A7A55"
-      }
-    }, d.done, " cumplidas"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#C98A2A"
-      }
-    }, d.pending, " pendientes"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#C1442D"
-      }
-    }, d.overdue, " vencidas"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "#8A8A93"
-      }
-    }, d.cancelled, " canceladas")), d.rescheduledCount > 0 && /*#__PURE__*/React.createElement("div", {
-      style: styles.kpiCatReschedule
-    }, /*#__PURE__*/React.createElement(Ic, {
-      size: 11
-    }, "↻"), " ", d.rescheduledPct, "% modificadas (", d.rescheduledCount, "/", d.taskCount, " tareas)"));
-  }))));
-}
-function KpiStat({
-  label,
-  value,
-  color
-}) {
-  return /*#__PURE__*/React.createElement("div", {
-    style: styles.kpiStat
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 22,
-      fontWeight: 600,
-      color,
-      fontFamily: "'Space Grotesk', sans-serif"
-    }
-  }, value), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: "#8A8A93",
-      textTransform: "uppercase",
-      letterSpacing: "0.04em"
-    }
-  }, label));
 }
 function GcalBadge({
   task,
@@ -3832,6 +3658,17 @@ const styles = {
     padding: "1px 8px 1px 6px",
     fontWeight: 500,
     color: "#4C475A"
+  },
+  inlineSelect: {
+    fontSize: 11.5,
+    fontWeight: 500,
+    color: "#4C475A",
+    background: "transparent",
+    border: "none",
+    borderRadius: 4,
+    padding: "1px 2px",
+    cursor: "pointer",
+    maxWidth: 110
   },
   formModeTag: {
     display: "inline-block",
