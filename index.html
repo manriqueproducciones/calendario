@@ -250,6 +250,7 @@ const URGENCY = {
 };
 const urgencyRank = u => URGENCY[u] ? URGENCY[u].rank : 3;
 const uid = p => p + "_" + Math.random().toString(36).slice(2, 9);
+const normalizeSearch = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const STORAGE_KEY = "bitacora-standalone-v1";
 
 // ---------- Importar tareas desde un panel externo (ej. panel de cliente de la agencia) ----------
@@ -1536,8 +1537,11 @@ function TareasView({
       out = out.filter(i => i.date <= endOfWeek);
     }
     if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      out = out.filter(i => i.task.title.toLowerCase().includes(q));
+      const words = normalizeSearch(search).split(/\s+/).filter(Boolean);
+      out = out.filter(i => {
+        const t = normalizeSearch(i.task.title);
+        return words.every(w => t.includes(w));
+      });
     }
     return out;
   }, [items, statusFilter, dateLimit, search, today]);
@@ -1746,6 +1750,7 @@ function KanbanCard({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(it.task.title);
   const [editingDate, setEditingDate] = useState(false);
+  const [dateDraft, setDateDraft] = useState(it.task.startDate);
   const syncFlag = !!(it.task.gcal && it.task.gcal.eventId);
   const quickEdit = patch => onQuickEdit && onQuickEdit(it.task.id, patch, syncFlag);
   const saveTitle = () => {
@@ -1883,14 +1888,10 @@ function KanbanCard({
   }, c.name))), editingDate ? /*#__PURE__*/React.createElement("input", {
     type: "date",
     autoFocus: true,
-    value: it.task.startDate,
-    onChange: e => {
-      quickEdit({
-        startDate: e.target.value
-      });
-      setEditingDate(false);
-    },
-    onBlur: () => setEditingDate(false),
+    value: dateDraft,
+    onChange: e => setDateDraft(e.target.value),
+    onBlur: () => { setEditingDate(false); if (dateDraft && dateDraft !== it.task.startDate) quickEdit({ startDate: dateDraft }); },
+    onKeyDown: e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setDateDraft(it.task.startDate); setEditingDate(false); } },
     style: {
       fontSize: 11,
       border: `1px solid ${ACCENT}`,
@@ -3151,6 +3152,7 @@ function TaskRow({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(it.task.title);
   const [editingDate, setEditingDate] = useState(false);
+  const [dateDraft, setDateDraft] = useState(it.task.startDate);
   const syncFlag = !!(it.task.gcal && it.task.gcal.eventId);
   const quickEdit = patch => onQuickEdit && onQuickEdit(it.task.id, patch, syncFlag);
   const saveTitle = () => {
@@ -3287,15 +3289,11 @@ function TaskRow({
   }, l))), editingDate ? /*#__PURE__*/React.createElement("input", {
     type: "date",
     autoFocus: true,
-    value: it.task.startDate,
+    value: dateDraft,
     onClick: e => e.stopPropagation(),
-    onChange: e => {
-      quickEdit({
-        startDate: e.target.value
-      });
-      setEditingDate(false);
-    },
-    onBlur: () => setEditingDate(false),
+    onChange: e => setDateDraft(e.target.value),
+    onBlur: () => { setEditingDate(false); if (dateDraft && dateDraft !== it.task.startDate) quickEdit({ startDate: dateDraft }); },
+    onKeyDown: e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setDateDraft(it.task.startDate); setEditingDate(false); } },
     style: {
       fontSize: 11.5,
       border: `1px solid ${ACCENT}`,
