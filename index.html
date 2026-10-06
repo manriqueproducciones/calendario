@@ -29,12 +29,15 @@
     body { background: #F4F3F0; }
     #root { margin: 0; padding: 0; max-width: 100%; }
     .app-shell { zoom: 1 !important; flex-direction: column !important; border-radius: 0 !important; min-height: 100vh !important; border: none !important; }
-    .app-sidebar { width: 100% !important; box-sizing: border-box; }
-    .app-nav { display: flex !important; gap: 4px; margin-top: 12px !important; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
-    .app-nav button { flex-shrink: 0; white-space: nowrap; }
-    .app-header { flex-direction: column !important; align-items: flex-start !important; gap: 10px; padding: 16px 16px 10px !important; }
-    .app-header > div:last-child { width: 100%; flex-wrap: wrap; }
+    html, body { overflow-x: hidden; }
+    .app-sidebar { width: 100% !important; box-sizing: border-box; padding: 14px 14px 12px !important; }
+    .app-nav { display: flex !important; gap: 6px; margin-top: 12px !important; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+    .app-nav button { flex-shrink: 0; white-space: nowrap; width: auto !important; border: 1px solid #D9D6DE !important; border-radius: 999px !important; padding: 8px 15px !important; margin-bottom: 0 !important; font-size: 14px !important; }
+    .app-header { flex-direction: column !important; align-items: flex-start !important; gap: 10px; padding: 14px 14px 10px !important; }
+    .app-header > div:last-child { width: 100%; flex-wrap: wrap; gap: 6px !important; }
+    .app-header button { padding: 8px 11px !important; font-size: 12.5px !important; }
     .app-main { min-width: 0 !important; }
+    .pld-scroll { padding: 0 12px 28px !important; }
   }
 </style>
 </head>
@@ -251,6 +254,32 @@ const URGENCY = {
 const urgencyRank = u => URGENCY[u] ? URGENCY[u].rank : 3;
 const uid = p => p + "_" + Math.random().toString(36).slice(2, 9);
 const normalizeSearch = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+// ---------- Detección de celular (una sola suscripción compartida) ----------
+const mobileMQ = typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(max-width: 720px)") : null;
+function useIsMobile() {
+  return React.useSyncExternalStore(
+    cb => { if (!mobileMQ) return () => {}; mobileMQ.addEventListener("change", cb); return () => mobileMQ.removeEventListener("change", cb); },
+    () => (mobileMQ ? mobileMQ.matches : false),
+    () => false
+  );
+}
+
+// Desplegable compacto: se ve como un chip del tamaño de su texto, pero abre el selector nativo al tocarlo.
+function ChipSelect({ value, options, onChange, color, bold }) {
+  const current = options.find(o => String(o.value) === String(value));
+  const label = current ? current.label : "";
+  return React.createElement("label", {
+    onClick: e => e.stopPropagation(),
+    style: { position: "relative", display: "inline-flex", alignItems: "center", background: "#EFEDE8", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: bold ? 700 : 500, color: color || "#4C475A", maxWidth: 150, cursor: "pointer" }
+  }, React.createElement("span", {
+    style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+  }, label), React.createElement("select", {
+    value: value,
+    onChange: e => onChange(e.target.value),
+    style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", fontSize: 16 }
+  }, options.map(o => React.createElement("option", { key: String(o.value), value: o.value }, o.label))));
+}
 const STORAGE_KEY = "bitacora-standalone-v1";
 
 // ---------- Importar tareas desde un panel externo (ej. panel de cliente de la agencia) ----------
@@ -435,6 +464,8 @@ function Plandia() {
   const [activeCategory, setActiveCategory] = useState(null);
   const [activeClient, setActiveClient] = useState(null);
   const [formState, setFormState] = useState(null);
+  const isMobile = useIsMobile();
+  const [showFilters, setShowFilters] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(null);
@@ -1130,7 +1161,59 @@ function Plandia() {
       ...styles.navBtn,
       ...(view === key ? styles.navBtnActive : {})
     }
-  }, label))), /*#__PURE__*/React.createElement("div", {
+  }, label))), isMobile && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowFilters(true),
+    style: {
+      ...styles.gcalConnectBtn,
+      width: "100%",
+      justifyContent: "center",
+      marginTop: 10,
+      fontWeight: 600,
+      color: (activeCategory || activeClient) ? "#fff" : "#33566B",
+      background: (activeCategory || activeClient) ? "#8B4F82" : "#fff",
+      borderColor: (activeCategory || activeClient) ? "#8B4F82" : "#E3E1E6"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    size: 13
+  }, "⚙"), " Filtros", [activeCategory && catById[activeCategory] && catById[activeCategory].name, activeClient && clientById[activeClient] && clientById[activeClient].name].filter(Boolean).map(n => ` · ${n}`).join("")), /*#__PURE__*/React.createElement("div", {
+    style: !isMobile ? {
+      display: "contents"
+    } : showFilters ? {
+      position: "fixed",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      background: "#ECEBE6",
+      zIndex: 1000,
+      overflowY: "auto",
+      padding: "18px 16px 60px",
+      boxSizing: "border-box"
+    } : {
+      display: "none"
+    }
+  }, isMobile && showFilters && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Space Grotesk', sans-serif",
+      fontWeight: 600,
+      fontSize: 20,
+      color: "#2C1B45"
+    }
+  }, "Filtros"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowFilters(false),
+    style: {
+      ...styles.formSave,
+      padding: "9px 20px",
+      fontSize: 14
+    }
+  }, "Listo")), /*#__PURE__*/React.createElement("div", {
     style: styles.sideDivider
   }), /*#__PURE__*/React.createElement("div", {
     style: styles.sideLabel
@@ -1314,7 +1397,7 @@ function Plandia() {
     onClick: () => setShowClientForm(true)
   }, /*#__PURE__*/React.createElement(Ic, {
     size: 13
-  }, "+"), " Nuevo cliente")), /*#__PURE__*/React.createElement("main", {
+  }, "+"), " Nuevo cliente"))), /*#__PURE__*/React.createElement("main", {
     className: "app-main",
     style: styles.main
   }, /*#__PURE__*/React.createElement("header", {
@@ -1506,6 +1589,8 @@ function TareasView({
   const [groupBy, setGroupBy] = useState("fecha");
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState({});
+  const isMobile = useIsMobile();
+  const [moreFilters, setMoreFilters] = useState(false);
   const items = useMemo(() => {
     const rangeStart = addDaysISO(today, -21);
     const rangeEnd = addDaysISO(today, 45);
@@ -1596,7 +1681,87 @@ function TareasView({
     });
     return list;
   }, [filtered, groupBy, catById, clientById, today]);
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  const mobileFilterCard = /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...styles.metricsFilterRow,
+      gap: 10,
+      padding: 12,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%",
+      display: "flex",
+      gap: 6,
+      overflowX: "auto",
+      WebkitOverflowScrolling: "touch",
+      paddingBottom: 2
+    }
+  }, STATUS_FILTERS.map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setStatusFilter(key),
+    style: {
+      ...styles.chipBtn,
+      flexShrink: 0,
+      padding: "7px 14px",
+      fontSize: 13,
+      ...(statusFilter === key ? styles.chipBtnActive : {})
+    }
+  }, label))), /*#__PURE__*/React.createElement("input", {
+    value: search,
+    onChange: e => setSearch(e.target.value),
+    placeholder: "Buscar tarea…",
+    style: {
+      ...styles.formSelect,
+      width: "100%",
+      fontSize: 16,
+      padding: "9px 12px"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMoreFilters(v => !v),
+    style: {
+      background: "transparent",
+      border: "none",
+      color: "#8B4F82",
+      fontSize: 12.5,
+      fontWeight: 600,
+      padding: 0,
+      cursor: "pointer"
+    }
+  }, moreFilters ? "Menos opciones ▴" : "Más opciones (fecha, agrupar) ▾"), moreFilters && /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%",
+      display: "flex",
+      flexDirection: "column",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: styles.formLabel
+  }, "Hasta"), /*#__PURE__*/React.createElement("div", {
+    style: styles.chipRow
+  }, [["todas", "Todas"], ["hoy", "Hasta hoy"], ["semana", "Hasta esta semana"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setDateLimit(key),
+    style: {
+      ...styles.chipBtn,
+      ...(dateLimit === key ? styles.chipBtnActive : {})
+    }
+  }, label)))), /*#__PURE__*/React.createElement("label", {
+    style: styles.formField
+  }, /*#__PURE__*/React.createElement("span", {
+    style: styles.formLabel
+  }, "Agrupar por"), /*#__PURE__*/React.createElement("select", {
+    value: groupBy,
+    onChange: e => setGroupBy(e.target.value),
+    style: {
+      ...styles.formSelect,
+      fontSize: 16
+    }
+  }, GROUP_OPTIONS.map(([k, l]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, l))))));
+  return /*#__PURE__*/React.createElement("div", null, isMobile ? mobileFilterCard : /*#__PURE__*/React.createElement("div", {
     style: styles.metricsFilterRow
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1760,6 +1925,9 @@ function KanbanCard({
       title: v
     });else setTitleDraft(it.task.title);
   };
+  const isMobile = useIsMobile();
+  const catOptsK = (categories || []).map(c => ({ value: c.id, label: c.name }));
+  const clientOptsK = [{ value: "", label: "Sin cliente" }, ...(clients || []).map(c => ({ value: c.id, label: c.name }))];
   return /*#__PURE__*/React.createElement("div", {
     style: {
       background: "#fff",
@@ -1814,7 +1982,7 @@ function KanbanCard({
       }
     },
     style: {
-      fontSize: 13,
+      fontSize: isMobile ? 16 : 13,
       fontWeight: 500,
       border: `1px solid ${ACCENT}`,
       borderRadius: 5,
@@ -1825,16 +1993,17 @@ function KanbanCard({
     }
   }) : /*#__PURE__*/React.createElement("div", {
     onDoubleClick: () => setEditingTitle(true),
-    title: "Doble clic para renombrar",
+    onClick: isMobile ? () => setEditingTitle(true) : undefined,
+    title: isMobile ? "Tocá para renombrar" : "Doble clic para renombrar",
     style: {
       display: "flex",
-      alignItems: "center",
+      alignItems: isMobile ? "flex-start" : "center",
       gap: 6,
-      fontSize: 13,
+      fontSize: isMobile ? 14.5 : 13,
       fontWeight: 500,
       color: done || cancelled ? "#8A8A93" : "#2C1B45",
       textDecoration: done || cancelled ? "line-through" : "none",
-      marginBottom: 4,
+      marginBottom: isMobile ? 8 : 4,
       cursor: "text"
     }
   }, urg && /*#__PURE__*/React.createElement("span", {
@@ -1843,10 +2012,11 @@ function KanbanCard({
       height: 6,
       borderRadius: "50%",
       background: urg.color,
-      flexShrink: 0
+      flexShrink: 0,
+      marginTop: isMobile ? 7 : 0
     }
   }), /*#__PURE__*/React.createElement("span", {
-    style: {
+    style: isMobile ? { minWidth: 0, wordBreak: "break-word" } : {
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap"
@@ -1860,7 +2030,13 @@ function KanbanCard({
       color: "#8A8A93",
       flexWrap: "wrap"
     }
-  }, categories && /*#__PURE__*/React.createElement("select", {
+  }, isMobile && categories && /*#__PURE__*/React.createElement(ChipSelect, {
+    value: it.task.categoryId || "", options: catOptsK, color: cat ? cat.color : "#8A8A93", bold: true,
+    onChange: v => quickEdit({ categoryId: v })
+  }), isMobile && clients && /*#__PURE__*/React.createElement(ChipSelect, {
+    value: it.task.clientId || "", options: clientOptsK,
+    onChange: v => quickEdit({ clientId: v || null })
+  }), !isMobile && categories && /*#__PURE__*/React.createElement("select", {
     value: it.task.categoryId || "",
     onChange: e => quickEdit({
       categoryId: e.target.value
@@ -1873,7 +2049,7 @@ function KanbanCard({
   }, categories.map(c => /*#__PURE__*/React.createElement("option", {
     key: c.id,
     value: c.id
-  }, c.name))), clients && /*#__PURE__*/React.createElement("select", {
+  }, c.name))), !isMobile && clients && /*#__PURE__*/React.createElement("select", {
     value: it.task.clientId || "",
     onChange: e => quickEdit({
       clientId: e.target.value || null
@@ -1893,7 +2069,7 @@ function KanbanCard({
     onBlur: () => { setEditingDate(false); if (dateDraft && dateDraft !== it.task.startDate) quickEdit({ startDate: dateDraft }); },
     onKeyDown: e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setDateDraft(it.task.startDate); setEditingDate(false); } },
     style: {
-      fontSize: 11,
+      fontSize: isMobile ? 16 : 11,
       border: `1px solid ${ACCENT}`,
       borderRadius: 5,
       padding: "1px 4px"
@@ -3162,6 +3338,79 @@ function TaskRow({
       title: v
     });else setTitleDraft(it.task.title);
   };
+  const isMobile = useIsMobile();
+  const [showActions, setShowActions] = useState(false);
+  const askDelete = () => {
+    setConfirmingDelete(it.task.id);
+    setTimeout(() => setConfirmingDelete(v => v === it.task.id ? null : v), 2500);
+  };
+  const actionBtns = [/*#__PURE__*/React.createElement("button", {
+    key: "dup",
+    onClick: e => { e.stopPropagation(); setFormState({ mode: "duplicate", task: it.task }); },
+    title: "Duplicar tarea",
+    style: styles.iconBtn
+  }, /*#__PURE__*/React.createElement(Ic, { size: 12 }, "⧉")), /*#__PURE__*/React.createElement("button", {
+    key: "edit",
+    onClick: e => { e.stopPropagation(); setFormState({ mode: "edit", task: it.task }); },
+    title: "Editar tarea (formulario completo)",
+    style: styles.iconBtn
+  }, /*#__PURE__*/React.createElement(Ic, { size: 12 }, "✎")), /*#__PURE__*/React.createElement("button", {
+    key: "cancel",
+    onClick: () => setStatus(it.key, "cancelled"),
+    title: cancelled ? "Reabrir esta instancia" : "Cancelar solo esta instancia",
+    style: { ...styles.iconBtn, ...(cancelled ? styles.iconBtnCancelled : {}) }
+  }, /*#__PURE__*/React.createElement(Ic, { size: 12 }, "✕")), confirmingDelete === it.task.id ? /*#__PURE__*/React.createElement("button", {
+    key: "del",
+    onClick: () => deleteTask(it.task),
+    style: styles.confirmDeleteBtn
+  }, "confirmar") : /*#__PURE__*/React.createElement("button", {
+    key: "del",
+    onClick: askDelete,
+    title: "Eliminar tarea (todas las instancias)",
+    style: styles.iconBtn
+  }, /*#__PURE__*/React.createElement(Ic, { size: 12 }, "🗑"))];
+  const moreBtn = /*#__PURE__*/React.createElement("button", {
+    key: "more",
+    onClick: e => { e.stopPropagation(); setShowActions(v => !v); },
+    title: "Más acciones",
+    style: { ...styles.iconBtn, width: 34, height: 34, color: showActions ? ACCENT : "#8A8A93" }
+  }, /*#__PURE__*/React.createElement(Ic, { size: 18 }, "⋯"));
+  const mobBtn = { fontSize: 12.5, fontWeight: 500, color: "#4C475A", background: "#fff", border: "1px solid #E3E1E6", borderRadius: 999, padding: "7px 13px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5 };
+  const actionsBar = /*#__PURE__*/React.createElement("div", {
+    style: { display: "flex", flexWrap: "wrap", gap: 7, padding: "10px 12px 12px", background: "#FBFAF8", borderLeft: `3px solid ${cat ? cat.color : "#E3E1E6"}`, borderBottom: `1px solid ${LINE}`, marginBottom: 3 }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => { setEditingTitle(true); setShowActions(false); },
+    style: mobBtn
+  }, "✎ Renombrar"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => { setFormState({ mode: "duplicate", task: it.task }); setShowActions(false); },
+    style: mobBtn
+  }, "⧉ Duplicar"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => { setFormState({ mode: "edit", task: it.task }); setShowActions(false); },
+    style: mobBtn
+  }, "Editar completa"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => { setStatus(it.key, "cancelled"); setShowActions(false); },
+    style: { ...mobBtn, color: cancelled ? "#5A7A55" : "#B0503A" }
+  }, cancelled ? "Reabrir" : "✕ Cancelar esta vez"), confirmingDelete === it.task.id ? /*#__PURE__*/React.createElement("button", {
+    onClick: () => deleteTask(it.task),
+    style: { ...mobBtn, background: "#B0503A", color: "#fff", borderColor: "#B0503A" }
+  }, "Confirmar: eliminar") : /*#__PURE__*/React.createElement("button", {
+    onClick: askDelete,
+    style: { ...mobBtn, color: "#B0503A" }
+  }, "🗑 Eliminar"));
+  const selBase = styles.inlineSelect;
+  const catOpts = (categories || []).map(c => ({ value: c.id, label: c.name }));
+  const clientOpts = [{ value: "", label: "Sin cliente" }, ...(clients || []).map(c => ({ value: c.id, label: c.name }))];
+  const urgOpts = URGENCY_OPTIONS.map(([k, l]) => ({ value: k, label: l }));
+  const metaChips = categories && clients ? [/*#__PURE__*/React.createElement(ChipSelect, {
+    key: "cat", value: it.task.categoryId || "", options: catOpts, color: cat ? cat.color : "#4C475A", bold: true,
+    onChange: v => quickEdit({ categoryId: v })
+  }), /*#__PURE__*/React.createElement(ChipSelect, {
+    key: "cli", value: it.task.clientId || "", options: clientOpts,
+    onChange: v => quickEdit({ clientId: v || null })
+  }), /*#__PURE__*/React.createElement(ChipSelect, {
+    key: "urg", value: it.task.urgency || "media", options: urgOpts, color: urg ? urg.color : "#4C475A", bold: true,
+    onChange: v => quickEdit({ urgency: v })
+  })] : null;
   return /*#__PURE__*/React.createElement("div", {
     style: styles.rowWrap
   }, /*#__PURE__*/React.createElement("div", {
@@ -3199,7 +3448,7 @@ function TaskRow({
       }
     },
     style: {
-      fontSize: 14,
+      fontSize: isMobile ? 16 : 14,
       fontWeight: 500,
       border: `1px solid ${ACCENT}`,
       borderRadius: 5,
@@ -3218,16 +3467,16 @@ function TaskRow({
     },
     title: "Doble clic para renombrar",
     style: {
-      fontSize: 14,
+      fontSize: isMobile ? 15 : 14,
       fontWeight: 500,
       color: done || cancelled ? "#B3AFC0" : "#2C1B45",
       textDecoration: done || cancelled ? "line-through" : "none",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
+      overflow: isMobile ? "visible" : "hidden",
+      textOverflow: isMobile ? "clip" : "ellipsis",
+      whiteSpace: isMobile ? "normal" : "nowrap",
       cursor: hasExtras ? "pointer" : "text",
       display: "flex",
-      alignItems: "center",
+      alignItems: isMobile ? "flex-start" : "center",
       gap: 6
     }
   }, hasExtras && /*#__PURE__*/React.createElement(Ic, {
@@ -3244,42 +3493,44 @@ function TaskRow({
       background: urg.color,
       flexShrink: 0
     }
-  }), it.task.title), /*#__PURE__*/React.createElement("div", {
-    style: styles.metaRow
-  }, categories && /*#__PURE__*/React.createElement("select", {
+  }), /*#__PURE__*/React.createElement("span", {
+    style: { minWidth: 0, wordBreak: "break-word" }
+  }, it.task.title)), /*#__PURE__*/React.createElement("div", {
+    style: isMobile ? { ...styles.metaRow, gap: 6, marginTop: 6 } : styles.metaRow
+  }, isMobile ? metaChips : categories && /*#__PURE__*/React.createElement("select", {
     value: it.task.categoryId || "",
     onChange: e => quickEdit({
       categoryId: e.target.value
     }),
     onClick: e => e.stopPropagation(),
     style: {
-      ...styles.inlineSelect,
+      ...selBase,
       color: cat ? cat.color : "#4C475A",
       fontWeight: 600
     }
   }, categories.map(c => /*#__PURE__*/React.createElement("option", {
     key: c.id,
     value: c.id
-  }, c.name))), clients && /*#__PURE__*/React.createElement("select", {
+  }, c.name))), !isMobile && clients && /*#__PURE__*/React.createElement("select", {
     value: it.task.clientId || "",
     onChange: e => quickEdit({
       clientId: e.target.value || null
     }),
     onClick: e => e.stopPropagation(),
-    style: styles.inlineSelect
+    style: selBase
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
   }, "Sin cliente"), clients.map(c => /*#__PURE__*/React.createElement("option", {
     key: c.id,
     value: c.id
-  }, c.name))), /*#__PURE__*/React.createElement("select", {
+  }, c.name))), !isMobile && /*#__PURE__*/React.createElement("select", {
     value: it.task.urgency || "media",
     onChange: e => quickEdit({
       urgency: e.target.value
     }),
     onClick: e => e.stopPropagation(),
     style: {
-      ...styles.inlineSelect,
+      ...selBase,
       color: urg ? urg.color : "#4C475A",
       fontWeight: 600
     }
@@ -3295,7 +3546,7 @@ function TaskRow({
     onBlur: () => { setEditingDate(false); if (dateDraft && dateDraft !== it.task.startDate) quickEdit({ startDate: dateDraft }); },
     onKeyDown: e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setDateDraft(it.task.startDate); setEditingDate(false); } },
     style: {
-      fontSize: 11.5,
+      fontSize: isMobile ? 16 : 11.5,
       border: `1px solid ${ACCENT}`,
       borderRadius: 5,
       padding: "1px 4px"
@@ -3333,52 +3584,7 @@ function TaskRow({
     gcalConnected: gcalConnected,
     onSync: () => retrySync(it.task),
     onUnsync: () => unsyncFromCalendar(it.task)
-  }))), /*#__PURE__*/React.createElement("button", {
-    onClick: e => {
-      e.stopPropagation();
-      setFormState({
-        mode: "duplicate",
-        task: it.task
-      });
-    },
-    title: "Duplicar tarea",
-    style: styles.iconBtn
-  }, /*#__PURE__*/React.createElement(Ic, {
-    size: 12
-  }, "⧉")), /*#__PURE__*/React.createElement("button", {
-    onClick: e => {
-      e.stopPropagation();
-      setFormState({
-        mode: "edit",
-        task: it.task
-      });
-    },
-    title: "Editar tarea (formulario completo)",
-    style: styles.iconBtn
-  }, /*#__PURE__*/React.createElement(Ic, {
-    size: 12
-  }, "✎")), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setStatus(it.key, "cancelled"),
-    title: cancelled ? "Reabrir esta instancia" : "Cancelar solo esta instancia",
-    style: {
-      ...styles.iconBtn,
-      ...(cancelled ? styles.iconBtnCancelled : {})
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    size: 12
-  }, "✕")), confirmingDelete === it.task.id ? /*#__PURE__*/React.createElement("button", {
-    onClick: () => deleteTask(it.task),
-    style: styles.confirmDeleteBtn
-  }, "confirmar") : /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      setConfirmingDelete(it.task.id);
-      setTimeout(() => setConfirmingDelete(v => v === it.task.id ? null : v), 2500);
-    },
-    title: "Eliminar tarea (todas las instancias)",
-    style: styles.iconBtn
-  }, /*#__PURE__*/React.createElement(Ic, {
-    size: 12
-  }, "🗑"))), isOpen && hasExtras && /*#__PURE__*/React.createElement("div", {
+  }))), ...(isMobile ? [moreBtn] : actionBtns)), isMobile && showActions && actionsBar, isOpen && hasExtras && /*#__PURE__*/React.createElement("div", {
     style: styles.expandPanel
   }, /*#__PURE__*/React.createElement("div", {
     style: {
